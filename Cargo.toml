@@ -1,0 +1,11 @@
+[package]
+name = "MazMailChatBot"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+reqwest = { version = "0.11", features = ["json", "stream"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+futures-util = "0.3"
+serde_json = "1.0.138"  # Ensure you have futures-util for StreamExt
