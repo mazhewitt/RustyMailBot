@@ -1,0 +1,12 @@
+From: customer@example.com
+To: support@example.com
+Subject: Test Email 4: Inquiry About Product Features
+
+Dear Support Team,
+
+I hope you are well. I recently came across your latest product and would appreciate more detailed information regarding its features and compatibility with existing systems. Could you please provide further details at your earliest convenience?
+
+Many thanks in advance.
+
+Best regards,
+Customer

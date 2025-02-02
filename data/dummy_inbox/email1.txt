@@ -1,0 +1,10 @@
+From: alice@example.com
+To: bob@example.com
+Subject: Test Email 1: Hello from Alice
+
+Hi Bob,
+
+Just a quick note to test out our new email chatbot system. I hope you’re having a good day.
+
+Cheers,
+Alice
