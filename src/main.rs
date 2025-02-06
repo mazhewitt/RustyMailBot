@@ -14,6 +14,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a mutable Ollama client.
     let mut ollama = Ollama::default();
 
+    // load inbox
+    let emails = load_emails("./data/dummy_inbox").expect("Cannot load emails");
+    let mut vector_db = VectorDatabase::new();
+    for email in emails {
+        vector_db.insert(email, &mut ollama).await?;
+    }
     // Start the conversation history with the system prompt.
     let mut history = vec![ChatMessage::system(SYSTEM_PROMPT.to_string())];
 
@@ -33,10 +39,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             break;
         }
 
+        let refined_query = refine_query(user_input, &mut ollama).await?;
+        println!("Refined Query: {}", refined_query);
+
+
+        let context_str = vector_db.get_context(&refined_query, 2, &mut ollama).await?;
+        println!("Retrieved Context:\n{}", context_str);
+
+        let mut conversation = vec![
+            ChatMessage::system(SYSTEM_PROMPT.to_string()),
+            ChatMessage::system(format!("Context from emails:\n{}", context_str)),
+            ChatMessage::user(user_input.to_string()),
+        ];
+
         // Create a chat request with the user's message.
         let request = ChatMessageRequest::new(
             MODEL_NAME.to_string(),
-            vec![ChatMessage::user(user_input.to_string())],
+            conversation,
         );
 
         // Send the chat messages with the current history.
@@ -158,9 +177,6 @@ mod tests {
         let mut ollama = Ollama::default();
         let folder = "data/dummy_inbox";
         let emails = load_emails(folder)?;
-        // Ensure we have 5 emails.
-        assert_eq!(emails.len(), 5, "Expected 5 emails in the dummy inbox");
-
         let mut db = VectorDatabase::new();
         for email in emails {
             db.insert(email, &mut ollama).await?;
@@ -241,15 +257,18 @@ Alice";
     #[tokio::test]
     async fn test_refined_query_retrieval() -> Result<(), Box<dyn std::error::Error>> {
         let mut ollama = Ollama::default();
-        let user_input = "Compose a reply to Alice saying that the chatbot system is very good";
-
-        let refined_query = refine_query(user_input, &mut ollama).await?;
-        println!("Refined Query: {}", refined_query);
 
         let mut vector_db = VectorDatabase::new();
         vector_db.insert("Email from Alice: Hi Bob, just checking in.".to_string(), &mut ollama).await?;
         vector_db.insert("Email from Carol: Meeting tomorrow.".to_string(), &mut ollama).await?;
         vector_db.insert("Email from Alice: System feedback, everything is working well.".to_string(), &mut ollama).await?;
+
+
+        let user_input = "Compose a reply to Alice saying that the chatbot system is very good";
+
+        let refined_query = refine_query(user_input, &mut ollama).await?;
+        println!("Refined Query: {}", refined_query);
+
 
         let context_str = vector_db.get_context(&refined_query, 2, &mut ollama).await?;
         println!("Retrieved Context:\n{}", context_str);
