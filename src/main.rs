@@ -1,3 +1,5 @@
+mod gmail_inbox;
+
 use std::io::{self, Write};
 use tokio;
 
