@@ -5,9 +5,42 @@ use google_gmail1::Gmail;
 use google_gmail1::oauth2::{read_application_secret, InstalledFlowAuthenticator, InstalledFlowReturnMethod};
 use hyper::Client;
 use hyper_rustls::{ HttpsConnectorBuilder};
-use log::info;
-use tokio::io::{stdin, AsyncBufReadExt, BufReader};
+use log::{error, info};
+use tokio::{io, task};
+use tokio::io::{stdin, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
+
+use oauth2::{AuthUrl, ClientId, ClientSecret, TokenUrl, RedirectUrl, AuthorizationCode, CsrfToken, Scope, StandardTokenResponse, TokenResponse};
+use oauth2::basic::BasicClient;
+use oauth2::reqwest::http_client;
+use std::fs;
+use std::path::Path;
+use serde::{Deserialize, Serialize};
+
+#[derive(Deserialize)]
+struct OAuthConfig {
+    installed: InstalledConfig,
+}
+
+#[derive(Deserialize)]
+struct InstalledConfig {
+    client_id: String,
+    client_secret: String,
+    auth_uri: String,
+    token_uri: String,
+    redirect_uris: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct TokenStorage {
+    access_token: String,
+    refresh_token: Option<String>,
+    expires_in: Option<u64>,
+}
+
+const CONFIG_FILE: &str = "./data/client_secret.json";
+const TOKEN_FILE: &str = "token.json";
+
 
 /// A struct that encapsulates the authenticated Gmail client.
 struct GmailClient {
@@ -19,52 +52,84 @@ impl GmailClient {
     /// Logs in to Gmail using OAuth2 interactive flow.
     ///
     /// This function reads the client secret from `client_secret.json` and caches tokens to `tokencache.json`.
-    async fn login() -> Result<Self, Box<dyn Error>> {
-        // Start the login process.
-        log::info!("Starting Gmail login process...");
+    async fn perform_oauth_login() {
+        let config_data = fs::read_to_string(CONFIG_FILE).expect("Failed to read client secret file");
+        let config: OAuthConfig = serde_json::from_str(&config_data).expect("Invalid JSON format");
 
-        // Log reading client secret from file.
-        log::info!("Reading client secret from file...");
-        let secret = read_application_secret("./data/client_secret.json").await?;
-        log::info!("Client secret loaded successfully.");
-
-        // Prompt the user to proceed with interactive authentication.
-        println!("Press Enter to begin interactive OAuth login...");
-        let mut reader = BufReader::new(stdin());
-        let mut input = String::new();
-        reader.read_line(&mut input).await?;
-        log::info!("User confirmed to start interactive authentication.");
-
-        // Build the authenticator using an interactive flow.
-        // Tokens are cached to "tokencache.json" so you won’t need to login every time.
-        log::info!("Building interactive authenticator...");
-        let auth = InstalledFlowAuthenticator::builder(
-            secret,
-            InstalledFlowReturnMethod::Interactive,
+        let client = BasicClient::new(
+            ClientId::new(config.installed.client_id),
+            Some(ClientSecret::new(config.installed.client_secret)),
+            AuthUrl::new(config.installed.auth_uri).expect("Invalid auth URL"),
+            Some(TokenUrl::new(config.installed.token_uri).expect("Invalid token URL")),
         )
-            .persist_tokens_to_disk("tokencache.json")
-            .build()
-            .await?;
-        log::info!("Authenticator built successfully.");
+            .set_redirect_uri(RedirectUrl::new("urn:ietf:wg:oauth:2.0:oob".to_string()).expect("Invalid redirect URI"));
 
-        // Create an HTTPS connector using the builder.
-        log::info!("Building HTTPS connector...");
+        let (auth_url, _csrf_state) = client
+            .authorize_url(CsrfToken::new_random)
+            .add_scope(Scope::new("https://www.googleapis.com/auth/userinfo.profile".to_string()))
+            .add_scope(Scope::new("https://www.googleapis.com/auth/userinfo.email".to_string()))
+            .url();
+
+        println!("Open this URL in your browser and authorize the app: \n{}", auth_url);
+
+        print!("Enter the authorization code: ");
+        io::stdout().flush().await.expect("Failed to flush stdout");
+
+        let mut auth_code = String::new();
+        std::io::stdin()
+            .read_line(&mut auth_code)
+            .expect("Failed to read input");
+        let auth_code = auth_code.trim().to_string();
+
+        let token_result = client.exchange_code(AuthorizationCode::new(auth_code))
+            .request_async(|request| async {
+                oauth2::reqwest::async_http_client(request).await
+            })
+            .await
+            .expect("Failed to exchange code for token");
+
+        let token = TokenStorage {
+            access_token: token_result.access_token().secret().clone(),
+            refresh_token: token_result.refresh_token().map(|t| t.secret().clone()),
+            expires_in: token_result.expires_in().map(|d| d.as_secs()),
+        };
+
+        let token_json = serde_json::to_string_pretty(&token).expect("Failed to serialize token");
+        fs::write(TOKEN_FILE, token_json).expect("Failed to save token");
+
+        println!("Token saved to '{}'.", TOKEN_FILE);
+    }
+
+
+    /// Initialises the Gmail client.
+    ///
+    /// Checks if the token file exists; if not, performs the OAuth login.
+    /// Once a token is available, it builds the authenticator and creates the Gmail client.
+    pub async fn initialize() -> Result<Self, Box<dyn Error>> {
+        if !Path::new(TOKEN_FILE).exists() {
+            println!("No token file found. Initiating OAuth login.");
+            Self::perform_oauth_login().await;
+        } else {
+            println!("Token file found. Using existing credentials.");
+        }
+
+        let secret = read_application_secret(CONFIG_FILE).await?;
         let https = HttpsConnectorBuilder::new()
             .with_native_roots()
             .https_or_http()
             .enable_http1()
             .build();
-        log::info!("HTTPS connector built successfully.");
-
-        // Build a hyper client using the new HTTPS connector.
-        log::info!("Building hyper client...");
         let hyper_client = Client::builder().build::<_, hyper::Body>(https);
-        log::info!("Hyper client built successfully.");
 
-        // Instantiate the Gmail API client.
-        log::info!("Instantiating Gmail API client...");
+        let auth = InstalledFlowAuthenticator::builder(
+            secret,
+            InstalledFlowReturnMethod::HTTPRedirect,
+        )
+            .persist_tokens_to_disk(TOKEN_FILE)
+            .build()
+            .await?;
+
         let gmail = Gmail::new(hyper_client, auth);
-        log::info!("Gmail API client instantiated successfully.");
 
         Ok(GmailClient {
             client: Arc::new(Mutex::new(gmail)),
@@ -73,76 +138,73 @@ impl GmailClient {
 
     /// Retrieves and displays the subject and snippet of the latest emails in the inbox.
     ///
-    /// It first lists the messages with the query "in:inbox" and then fetches each message in full.
-    async fn get_inbox(&self) -> Result<(), Box<dyn Error>> {
-        // Lock the client for safe asynchronous access.
+    /// It lists messages in the user's inbox and then fetches each message.
+    pub async fn get_inbox(&self) -> Result<(), Box<dyn Error>> {
+        info!("Fetching inbox messages...");
+
+        // Lock the client for safe async access.
         let mut client_guard = self.client.lock().await;
+        info!("Client lock acquired.");
 
-        // Create a call to list messages in the user's inbox.
-        // "me" is a special value that indicates the authenticated user.
-        let list_call = client_guard
-            .users()
-            .messages_list("me")
-            .q("in:inbox"); // Gmail query to select inbox messages
+        // List messages in the user's inbox.
+        let list_call = client_guard.users().messages_list("me").q("in:inbox");
+        info!("API call prepared: listing inbox messages...");
 
-        // Execute the API call.
-        let list_response = list_call.doit().await?;
-
-        // Check if any messages were returned.
-        if let Some(messages) = list_response.1.messages {
-            // Iterate through each message.
+        // Execute API call.
+        let (_, list_messages_response) = list_call.doit().await?;
+        if let Some(messages) = list_messages_response.messages {
             for message in messages.iter() {
                 if let Some(message_id) = &message.id {
-                    // Retrieve the full message details (including headers and snippet).
-                    let msg_response = client_guard
+                    info!("Fetching message ID: {}", message_id);
+                    let _msg_response = client_guard
                         .users()
                         .messages_get("me", message_id)
                         .format("full")
                         .doit()
                         .await?;
-
-                    let msg = msg_response.1;
-                    let snippet = msg.snippet.unwrap_or_else(|| String::from("(No snippet available)"));
-
-                    let subject = msg
-                        .payload
-                        .as_ref()
-                        .and_then(|payload| payload.headers.as_ref())
-                        .and_then(|headers| {
-                            headers.iter().find(|h| {
-                                h.name
-                                    .as_ref()
-                                    .map_or(false, |name| name.to_lowercase() == "subject")
-                            })
-                        })
-                        .map(|h| h.value.clone())
-                        .unwrap_or_else(|| Option::from(String::from("(No Subject)")));
-
-                    // Display the subject and snippet.
-                    println!("Subject: {}\nSnippet: {}\n", subject.unwrap(), snippet);
+                    info!("Message {} fetched successfully.", message_id);
                 }
             }
         } else {
-            println!("No messages found in the inbox.");
+            info!("No messages found in inbox.");
         }
+
         Ok(())
     }
 }
 
-#[tokio::test]
-#[ignore] // Marked as ignored because this test requires real OAuth and network access.
-async fn test_gmail_inbox_integration() -> Result<(), Box<dyn Error>> {
-    env_logger::init();
-    info!("Application starting...");
-    // The test will perform an interactive OAuth login if necessary.
-    // Make sure you have the `client_secret.json` in place and that your token cache (tokencache.json) is writable.
-    let gmail_client = GmailClient::login().await?;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::Path;
+    use log::info;
 
-    // Call get_inbox, which will print the email subjects and snippets.
-    // For an integration test, we simply verify that the function returns Ok.
-    gmail_client.get_inbox().await?;
+    /// This test checks that the initialisation process creates a GmailClient.
+    /// If no token file is present, it will run the OAuth flow.
+    #[tokio::test]
+    async fn test_initialize_creates_client_with_token() -> Result<(), Box<dyn Error>> {
+        // For testing, you may wish to simulate a "fresh start" by removing any existing token file.
+        if Path::new(TOKEN_FILE).exists() {
+            fs::remove_file(TOKEN_FILE)?;
+            println!("Existing token file removed for testing.");
+        }
 
-    // If no error occurs, we assume the integration with Gmail works as expected.
-    Ok(())
+        // This will prompt for OAuth if no token is found.
+        let gmail_client = GmailClient::initialize().await?;
+        info!("Gmail client initialised successfully.");
+        Ok(())
+    }
+
+    /// This test assumes a valid token file is present and tests the get_inbox method.
+    /// Marked as ignored since it performs live API calls.
+    #[tokio::test]
+    #[ignore]
+    async fn test_get_inbox() -> Result<(), Box<dyn Error>> {
+        let gmail_client = GmailClient::initialize().await?;
+        gmail_client.get_inbox().await?;
+        Ok(())
+    }
+
+
 }
-
