@@ -6,10 +6,13 @@ edition = "2021"
 [dependencies]
 actix-web = "4"
 actix-files = "0.6"
-tokio = { version = "1", features = ["macros", "time"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+env_logger = "0.10"
 async-stream = "0.3"
 bytes = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+google-gmail1 = "6.0.0"
+oauth2 = "4.0"
+reqwest = { version = "0.11", features = ["json", "rustls-tls", "blocking"] }
 log = "0.4.25"
-env_logger = "0.11.6"

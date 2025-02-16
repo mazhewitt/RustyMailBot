@@ -30,10 +30,10 @@
 </head>
 <body>
 <div id="root"></div>
+
+<!-- React App -->
 <script type="text/babel">
     const { useState } = React;
-
-
 
     function App() {
         const [name, setName] = useState('');
@@ -95,6 +95,19 @@
 
     // Render the App into the "root" element.
     ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+
+<!-- On load, check if we’re authenticated – if not, redirect to login -->
+<script>
+    fetch('/check_auth')
+        .then(res => res.json())
+        .then(data => {
+            if (!data.authenticated) {
+                // Not yet authenticated, so go to our OAuth login endpoint.
+                window.location.href = '/oauth/login';
+            }
+        })
+        .catch(err => console.error("Error checking auth:", err));
 </script>
 </body>
 </html>
