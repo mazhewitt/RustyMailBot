@@ -11,6 +11,7 @@ dependencies = [
  "async-stream",
  "bytes",
  "env_logger",
+ "futures-core",
  "google-gmail1",
  "log",
  "oauth2",
