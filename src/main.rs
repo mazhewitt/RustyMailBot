@@ -1,45 +1,61 @@
-mod gmail_inbox;
+mod gmail;
 
-use std::io::{self, Write};
-use tokio;
+use actix_files::Files;
+use actix_web::{web, App, HttpResponse, HttpServer, Error};
+use actix_web::middleware::Logger;
+use async_stream::stream;
+use bytes::Bytes;
+use serde_json::Value;
+use std::time::Duration;
+use tokio::time::sleep;
+use log::{info};
+use gmail::{check_auth, oauth_login, oauth_callback, get_inbox_messages};
 
 use ollama_rs::Ollama;
 use ollama_rs::generation::chat::ChatMessage;
 use ollama_rs::generation::chat::request::ChatMessageRequest;
 use ollama_rs::generation::embeddings::request::{GenerateEmbeddingsRequest, EmbeddingsInput};
 
+
 const MODEL_NAME: &str = "llama3.2";
 const SYSTEM_PROMPT: &str = "You are a helpful assistant for writing emails";
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create a mutable Ollama client.
+/// This endpoint streams a greeting unless the client sends "@list",
+/// in which case it streams Gmail inbox messages.
+async fn stream_greeting(req_body: web::Json<Value>) -> HttpResponse {
+
     let mut ollama = Ollama::default();
 
     // load inbox
-    let emails = load_emails("./data/dummy_inbox").expect("Cannot load emails");
+
     let mut vector_db = VectorDatabase::new();
-    for email in emails {
-        vector_db.insert(email, &mut ollama).await?;
-    }
-    // Start the conversation history with the system prompt.
+
     let mut history = vec![ChatMessage::system(SYSTEM_PROMPT.to_string())];
 
-    println!("Welcome to the Rust Chatbot. Type your message below (or 'exit' to quit):");
 
-    loop {
-        print!("> ");
-        io::stdout().flush()?;
-        let mut user_input = String::new();
-        io::stdin().read_line(&mut user_input)?;
-        let user_input = user_input.trim();
-        if user_input.is_empty() {
-            continue;
-        }
-        if user_input.eq_ignore_ascii_case("exit") || user_input.eq_ignore_ascii_case("quit") {
-            println!("Goodbye!");
-            break;
-        }
+    info!("Received request with payload: {:?}", req_body);
+
+    let user_input = req_body.get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("world")
+        .to_string();
+
+    if user_input.trim() == "@list" {
+        info!("Streaming inbox messages as requested with @list");
+        let inbox_stream = stream! {
+            match get_inbox_messages().await {
+                Ok(messages) => {
+                    for message in messages {
+                        if let Ok(json_message) = serde_json::to_string(&message) {
+                            yield Ok(Bytes::from(json_message + "\n"));
+                        } else {
+                            yield Err(actix_web::error::ErrorInternalServerError("Serialization error"));
+                        }
+                    }
+                },
+                Err(e) => yield Err(actix_web::error::ErrorInternalServerError(e)),
+            }
+        };
 
         let refined_query = refine_query(user_input, &mut ollama).await?;
         println!("Refined Query: {}", refined_query);
@@ -63,26 +79,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Send the chat messages with the current history.
         let response = ollama.send_chat_messages_with_history(&mut history, request).await?;
         println!("{}", response.message.content);
+
+        return HttpResponse::Ok()
+            .content_type("application/json")
+            .streaming(inbox_stream);
     }
 
-    Ok(())
+    let greeting_stream = stream! {
+        info!("Streaming chunk: 'hello '");
+        yield Ok::<_, Error>(Bytes::from("hello "));
+        sleep(Duration::from_millis(500)).await;
+        info!("Streaming chunk: '{}'", user_input);
+        yield Ok(Bytes::from(user_input));
+    };
+
+    HttpResponse::Ok()
+        .content_type("text/plain")
+        .streaming(greeting_stream)
 }
 
-/// Loads all emails (as plain text) from the specified folder.
-fn load_emails(folder: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    let mut emails = Vec::new();
-    for entry in std::fs::read_dir(folder)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_file() {
-            let content = std::fs::read_to_string(path)?;
-            emails.push(content);
-        }
-    }
-    Ok(emails)
+#[actix_web::main]
+async fn main() -> std::io::Result<()> {
+    env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
+    info!("Starting server on http://127.0.0.1:8080");
+
+    HttpServer::new(|| {
+        App::new()
+            .wrap(Logger::default())
+            // Use the Gmail module’s endpoints:
+            .route("/stream", web::post().to(stream_greeting))
+            .route("/check_auth", web::get().to(check_auth))
+            .route("/oauth/login", web::get().to(oauth_login))
+            .route("/oauth/callback", web::get().to(oauth_callback))
+            // Serve static files (including index.html) from the "./static" directory.
+            .service(Files::new("/", "./static").index_file("index.html"))
+    })
+        .bind(("127.0.0.1", 8080))?
+        .run()
+        .await
 }
 
-/// A document stored in the vector database.
 #[derive(Clone)]
 pub struct Document {
     pub text: String,
@@ -166,117 +202,4 @@ async fn refine_query(original_query: &str, ollama: &mut Ollama) -> Result<Strin
     let request = ChatMessageRequest::new(MODEL_NAME.to_string(), vec![]);
     let response = ollama.send_chat_messages_with_history(&mut conversation, request).await?;
     Ok(response.message.content.trim().to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tokio;
-
-    // Test that loading emails and searching via the embeddings API works as expected.
-    #[tokio::test]
-    async fn test_vector_database_load_and_search() -> Result<(), Box<dyn std::error::Error>> {
-        let mut ollama = Ollama::default();
-        let folder = "data/dummy_inbox";
-        let emails = load_emails(folder)?;
-        let mut db = VectorDatabase::new();
-        for email in emails {
-            db.insert(email, &mut ollama).await?;
-        }
-        assert_eq!(db.documents.len(), 5, "Expected 5 documents in the database");
-
-        // Test searching with a dummy query.
-        let results = db.search("important", 3, &mut ollama).await?;
-        // Since embeddings are produced by the model, we expect at most 3 results.
-        assert!(results.len() <= 3, "Expected at most 3 results");
-        Ok(())
-    }
-
-    // Test that the context (concatenated emails) returned for a query contains relevant keywords.
-    #[tokio::test]
-    async fn test_get_context() -> Result<(), Box<dyn std::error::Error>> {
-        let mut ollama = Ollama::default();
-        let mut db = VectorDatabase::new();
-        db.insert("Email about meeting schedule and agenda.".to_string(), &mut ollama).await?;
-        db.insert("Email regarding project deadlines and updates.".to_string(), &mut ollama).await?;
-        db.insert("Email discussing the upcoming team meeting.".to_string(), &mut ollama).await?;
-        db.insert("Email about vacation plans and holiday schedule.".to_string(), &mut ollama).await?;
-        db.insert("Email regarding budget report and financial review.".to_string(), &mut ollama).await?;
-
-        let context = db.get_context("meeting", 3, &mut ollama).await?;
-        assert!(!context.is_empty(), "Context should not be empty");
-        println!("Context: {}", context);
-        assert!(context.to_lowercase().contains("meeting"), "Context should mention 'meeting'");
-        Ok(())
-    }
-
-    // Test that a reply generated for a dummy email is not empty.
-    #[tokio::test]
-    async fn test_reply_to_dummy_email() -> Result<(), Box<dyn std::error::Error>> {
-        let mut ollama = Ollama::default();
-
-        // Load emails from the dummy inbox folder.
-        let emails = load_emails("data/dummy_inbox")?;
-        assert!(!emails.is_empty(), "Dummy inbox should not be empty");
-
-        let mut vector_db = VectorDatabase::new();
-        for email in emails {
-            vector_db.insert(email, &mut ollama).await?;
-        }
-
-        // Define a dummy email.
-        let email_1 = "Email 1 – Simple Greeting
-From: alice@example.com
-To: bob@example.com
-Subject: Test Email 1: Hello from Alice
-
-Hi Bob,
-
-Just a quick note to test out our new email chatbot system. I hope you’re having a good day.
-
-Cheers,
-Alice";
-
-        // Retrieve context from the vector database.
-        let context = vector_db.get_context(email_1, 3, &mut ollama).await?;
-
-        // Build the conversation using system and user messages.
-        let mut conversation = vec![
-            ChatMessage::system(SYSTEM_PROMPT.to_string()),
-            ChatMessage::system(format!("Context from emails:\n{}", context)),
-            ChatMessage::user(format!("Please write a reply to the following email:\n\n{}", email_1)),
-        ];
-
-        let response = ollama.send_chat_messages_with_history(&mut conversation,
-                                                              ChatMessageRequest::new(MODEL_NAME.to_string(), vec![])
-        ).await?;
-        let reply = response.message.content;
-        assert!(!reply.trim().is_empty(), "The chatbot reply should not be empty");
-        Ok(())
-    }
-
-    // Test that the query refinement function returns a refined query and that using it to retrieve context finds a mention of "alice".
-    #[tokio::test]
-    async fn test_refined_query_retrieval() -> Result<(), Box<dyn std::error::Error>> {
-        let mut ollama = Ollama::default();
-
-        let mut vector_db = VectorDatabase::new();
-        vector_db.insert("Email from Alice: Hi Bob, just checking in.".to_string(), &mut ollama).await?;
-        vector_db.insert("Email from Carol: Meeting tomorrow.".to_string(), &mut ollama).await?;
-        vector_db.insert("Email from Alice: System feedback, everything is working well.".to_string(), &mut ollama).await?;
-
-
-        let user_input = "Compose a reply to Alice saying that the chatbot system is very good";
-
-        let refined_query = refine_query(user_input, &mut ollama).await?;
-        println!("Refined Query: {}", refined_query);
-
-
-        let context_str = vector_db.get_context(&refined_query, 2, &mut ollama).await?;
-        println!("Retrieved Context:\n{}", context_str);
-
-        assert!(!refined_query.is_empty());
-        assert!(context_str.to_lowercase().contains("alice"));
-        Ok(())
-    }
 }

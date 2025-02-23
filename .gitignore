@@ -2,3 +2,4 @@
 /testmain
 *.json
 .idea/
+*.xml
