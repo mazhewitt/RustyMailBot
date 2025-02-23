@@ -9,6 +9,7 @@ dependencies = [
  "actix-files",
  "actix-web",
  "async-stream",
+ "base64 0.21.7",
  "bytes",
  "env_logger",
  "futures-core",

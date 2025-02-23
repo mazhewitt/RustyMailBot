@@ -1,6 +1,4 @@
-use actix_web::{HttpResponse, Responder, HttpRequest, Error};
-use async_stream::stream;
-use bytes::Bytes;
+use actix_web::{HttpResponse, Responder, HttpRequest};
 use log::{info, error};
 use oauth2::basic::BasicClient;
 use oauth2::{AuthUrl, TokenUrl, RedirectUrl, ClientId, ClientSecret, Scope, CsrfToken, AuthorizationCode};
@@ -11,7 +9,7 @@ use serde_json::Value;
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
-use tokio::time::sleep;
+use base64::{engine::general_purpose::URL_SAFE, Engine as _};
 
 const GMAIL_SCOPE: &str = "https://www.googleapis.com/auth/gmail.readonly";
 const TOKEN_CACHE_FILE: &str = "tokencache.json";
@@ -56,51 +54,7 @@ pub fn read_access_token() -> Result<String, Box<dyn std::error::Error>> {
 }
 
 /// Fetches the inbox messages using the Gmail API.
-pub async fn get_inbox_messages() -> Result<Vec<Message>, Box<dyn std::error::Error>> {
-    info!("Getting Inbox messages");
-    let access_token = read_access_token()?;
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()?;
 
-    info!("Fetching inbox messages from Gmail API...");
-    let response = client
-        .get(GMAIL_API_URL)
-        .bearer_auth(&access_token)
-        .send()
-        .await?;
-
-    if response.status().is_success() {
-        info!("Successfully fetched inbox messages");
-        let messages_response: Value = response.json().await?;
-        let message_ids: Vec<String> = messages_response["messages"].as_array()
-            .unwrap_or(&vec![])
-            .iter()
-            .filter_map(|m| m["id"].as_str().map(|s| s.to_string()))
-            .collect();
-
-        let mut messages = Vec::new();
-        for message_id in message_ids.iter() {
-            let message_url = format!("https://gmail.googleapis.com/gmail/v1/users/me/messages/{}", message_id);
-            info!("Fetching message details for ID: {}", message_id);
-            let message_response = client
-                .get(&message_url)
-                .bearer_auth(&access_token)
-                .send()
-                .await?;
-
-            if message_response.status().is_success() {
-                info!("Successfully fetched message details for ID: {}", message_id);
-                let message: Message = message_response.json().await?;
-                messages.push(message);
-            }
-        }
-        Ok(messages)
-    } else {
-        error!("Failed to fetch inbox: {}", response.status());
-        Err(format!("Failed to fetch inbox: {}", response.status()).into())
-    }
-}
 
 /// Checks whether a token file exists.
 pub async fn check_auth() -> impl Responder {
@@ -201,5 +155,139 @@ pub async fn oauth_callback(req: HttpRequest) -> impl Responder {
         Err(err) => {
             HttpResponse::InternalServerError().body(format!("Token exchange error: {:?}", err))
         }
+    }
+}
+
+
+
+
+
+
+
+// Define the custom Email struct with just the fields you need.
+#[derive(Debug, serde::Serialize)]
+pub struct Email {
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub date: Option<String>,
+    pub subject: Option<String>,
+    pub body: Option<String>,
+}
+
+// Helper function to find a header value (case insensitive) from a slice of headers.
+fn get_header(headers: &[Value], name: &str) -> Option<String> {
+    headers.iter().find(|h| {
+        h.get("name")
+            .and_then(|n| n.as_str())
+            .map(|n| n.eq_ignore_ascii_case(name))
+            .unwrap_or(false)
+    })
+        .and_then(|h| h.get("value").and_then(|v| v.as_str()).map(String::from))
+}
+
+// Helper function to extract the plain text body from a message payload.
+// It first checks if the payload itself is plain text; if not, it iterates over its parts.
+fn extract_plain_text_body(payload: &Value) -> Option<String> {
+    if let Some(mime_type) = payload.get("mimeType").and_then(|m| m.as_str()) {
+        if mime_type == "text/plain" {
+            return payload.get("body")
+                .and_then(|b| b.get("data"))
+                .and_then(|d| d.as_str())
+                .map(String::from);
+        }
+    }
+    if let Some(parts) = payload.get("parts").and_then(|p| p.as_array()) {
+        for part in parts {
+            if let Some(part_mime) = part.get("mimeType").and_then(|m| m.as_str()) {
+                if part_mime == "text/plain" {
+                    return part.get("body")
+                        .and_then(|b| b.get("data"))
+                        .and_then(|d| d.as_str())
+                        .map(String::from);
+                }
+            }
+        }
+    }
+    None
+}
+
+pub async fn get_inbox_messages() -> Result<Vec<Email>, Box<dyn std::error::Error>> {
+    info!("Getting Inbox messages");
+    let access_token = read_access_token()?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()?;
+
+    info!("Fetching inbox messages from Gmail API...");
+    let response = client
+        .get(GMAIL_API_URL)
+        .bearer_auth(&access_token)
+        .send()
+        .await?;
+
+    if response.status().is_success() {
+        info!("Successfully fetched inbox messages");
+        let messages_response: Value = response.json().await?;
+        let message_ids: Vec<String> = messages_response["messages"]
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .filter_map(|m| m.get("id").and_then(|id| id.as_str()).map(|s| s.to_string()))
+            .collect();
+
+        let mut emails = Vec::new();
+        for message_id in message_ids.iter() {
+            let message_url = format!(
+                "https://gmail.googleapis.com/gmail/v1/users/me/messages/{}",
+                message_id
+            );
+            info!("Fetching message details for ID: {}", message_id);
+            let message_response = client
+                .get(&message_url)
+                .bearer_auth(&access_token)
+                .send()
+                .await?;
+
+            if message_response.status().is_success() {
+                info!("Successfully fetched message details for ID: {}", message_id);
+                let message: Value = message_response.json().await?;
+                // Convert headers to a slice of Value to avoid temporary lifetime issues.
+                let headers: &[Value] = message["payload"]["headers"]
+                    .as_array()
+                    .map(|arr| &arr[..])
+                    .unwrap_or(&[]);
+
+                let from = get_header(headers, "From");
+                let to = get_header(headers, "To");
+                let date = get_header(headers, "Date");
+                let subject = get_header(headers, "Subject");
+                let body_data = extract_plain_text_body(&message["payload"]);
+
+                // Decode the base64url-encoded body using the new API.
+                let decoded_body = if let Some(data) = body_data {
+                    match URL_SAFE.decode(data) {
+                        Ok(bytes) => String::from_utf8(bytes).ok(),
+                        Err(e) => {
+                            error!("Failed to decode base64 body for message {}: {}", message_id, e);
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                emails.push(Email {
+                    from,
+                    to,
+                    date,
+                    subject,
+                    body: decoded_body,
+                });
+            }
+        }
+        Ok(emails)
+    } else {
+        error!("Failed to fetch inbox: {}", response.status());
+        Err(format!("Failed to fetch inbox: {}", response.status()).into())
     }
 }
