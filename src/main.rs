@@ -16,29 +16,62 @@ use ollama_rs::generation::chat::ChatMessage;
 use ollama_rs::generation::chat::request::ChatMessageRequest;
 use ollama_rs::generation::embeddings::request::{GenerateEmbeddingsRequest, EmbeddingsInput};
 
+use actix_session::{SessionMiddleware, storage::CookieSessionStore, Session};
+use actix_web::cookie::Key;
+use serde::{Deserialize, Serialize};
+
+struct AppState {
+    ollama: Ollama,
+}
+
+#[derive(Deserialize, Serialize)]
+struct UserSession {
+    history: Vec<ChatMessage>,
+    mailbox: VectorDatabase
+}
+
+impl Default for UserSession {
+    fn default() -> Self {
+        UserSession {
+            history: vec![ChatMessage::system(SYSTEM_PROMPT.to_string())],
+            mailbox: VectorDatabase { documents: vec![] },
+        }
+    }
+}
 
 const MODEL_NAME: &str = "llama3.2";
 const SYSTEM_PROMPT: &str = "You are a helpful assistant for writing emails";
 
 /// This endpoint streams a greeting unless the client sends "@list",
 /// in which case it streams Gmail inbox messages.
-async fn stream_greeting(req_body: web::Json<Value>) -> HttpResponse {
+async fn stream_greeting(data: web::Data<AppState>, session: Session, req_body: web::Json<Value>) -> HttpResponse {
 
-    let mut ollama = Ollama::default();
+    // get the Ollama instance from the app state
+    let mut ollama = data.ollama.clone();
 
-    // load inbox
+    let maybe_session =  session.get::<UserSession>("user_session");
 
-    let mut vector_db = VectorDatabase::new();
+    let mut user_session = if let Ok(Some(session_data)) = maybe_session {
+        // If session exists, use it
+        session_data
+    } else {
+        // If session is empty or an error occurred, create a new session
+        let mut new_session = UserSession::default();
 
-    let mut history = vec![ChatMessage::system(SYSTEM_PROMPT.to_string())];
+        new_session.mailbox.documents = load_emails().unwrap();
+
+        // Save the new session
+        if let Err(e) = session.insert("user_session", &new_session) {
+            log::error!("Failed to save session: {:?}", e);
+        }
+        new_session
+    };
 
 
     info!("Received request with payload: {:?}", req_body);
-
-    let user_input = req_body.get("name")
-        .and_then(Value::as_str)
-        .unwrap_or("world")
-        .to_string();
+    let user_input = req_body["message"].as_str().unwrap_or_default();
+    // Save the updated session
+    session.insert("user_session", &user_session).unwrap();
 
     if user_input.trim() == "@list" {
         info!("Streaming inbox messages as requested with @list");
@@ -57,11 +90,11 @@ async fn stream_greeting(req_body: web::Json<Value>) -> HttpResponse {
             }
         };
 
-        let refined_query = refine_query(user_input, &mut ollama).await?;
+        let refined_query = refine_query(&user_input, &mut ollama).await.unwrap();
         println!("Refined Query: {}", refined_query);
 
 
-        let context_str = vector_db.get_context(&refined_query, 2, &mut ollama).await?;
+        let context_str = user_session.mailbox.get_context(&refined_query, 2, &mut ollama).await.unwrap();
         println!("Retrieved Context:\n{}", context_str);
 
         let mut conversation = vec![
@@ -77,7 +110,7 @@ async fn stream_greeting(req_body: web::Json<Value>) -> HttpResponse {
         );
 
         // Send the chat messages with the current history.
-        let response = ollama.send_chat_messages_with_history(&mut history, request).await?;
+        let response = ollama.send_chat_messages_with_history(&mut user_session.history, request).await.unwrap();
         println!("{}", response.message.content);
 
         return HttpResponse::Ok()
@@ -98,20 +131,40 @@ async fn stream_greeting(req_body: web::Json<Value>) -> HttpResponse {
         .streaming(greeting_stream)
 }
 
+pub async fn load_emails() -> Result<Vec<Document>, Box<dyn std::error::Error>> {
+    let emails = get_inbox_messages().await?;
+    let documents = emails.into_iter().map(|email| {
+        Document {
+            text: format!(
+                "From: {}\nTo: {}\nDate: {}\nSubject: {}\n\n{}",
+                email.from.unwrap_or_default(),
+                email.to.unwrap_or_default(),
+                email.date.unwrap_or_default(),
+                email.subject.unwrap_or_default(),
+                email.body.unwrap_or_default()
+            ),
+            embedding: vec![], // Placeholder for embeddings
+        }
+    }).collect();
+    Ok(documents)
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
     info!("Starting server on http://127.0.0.1:8080");
 
-    HttpServer::new(|| {
+    let ollama = Ollama::new("http://localhost", 8000);
+
+    HttpServer::new(move || {
         App::new()
+            .app_data(web::Data::new(AppState { ollama: ollama.clone(), }))
             .wrap(Logger::default())
-            // Use the Gmail module’s endpoints:
+            .wrap(SessionMiddleware::new(CookieSessionStore::default(), Key::try_from("secret_key".as_bytes()).unwrap()))
             .route("/stream", web::post().to(stream_greeting))
             .route("/check_auth", web::get().to(check_auth))
             .route("/oauth/login", web::get().to(oauth_login))
             .route("/oauth/callback", web::get().to(oauth_callback))
-            // Serve static files (including index.html) from the "./static" directory.
             .service(Files::new("/", "./static").index_file("index.html"))
     })
         .bind(("127.0.0.1", 8080))?
@@ -126,10 +179,12 @@ pub struct Document {
 }
 
 /// A simple vector database that indexes documents by their embeddings.
-/// (Now using the Ollama embeddings API rather than rust‑bert.)
+#[derive(Clone)]
 pub struct VectorDatabase {
     pub documents: Vec<Document>,
 }
+
+
 
 impl VectorDatabase {
     pub fn new() -> Self {
