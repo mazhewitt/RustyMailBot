@@ -1,7 +1,7 @@
 use actix_web::{HttpResponse, Responder, HttpRequest};
 use log::{info, error};
 use oauth2::basic::BasicClient;
-use oauth2::{AuthUrl, TokenUrl, RedirectUrl, ClientId, ClientSecret, Scope, CsrfToken, AuthorizationCode};
+use oauth2::{AuthUrl, TokenUrl, RedirectUrl, ClientId, ClientSecret, Scope, CsrfToken, AuthorizationCode, RefreshToken};
 use oauth2::reqwest::async_http_client;
 use reqwest;
 use serde::{Serialize, Deserialize};
@@ -18,6 +18,10 @@ const GMAIL_API_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/mess
 #[derive(Serialize, Deserialize)]
 pub struct TokenCache {
     pub access_token: String,
+    pub token_type: Option<String>,
+    pub expires_in: Option<u64>,
+    pub refresh_token: Option<String>,
+    pub scope: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -56,10 +60,28 @@ pub fn read_access_token() -> Result<String, Box<dyn std::error::Error>> {
 /// Fetches the inbox messages using the Gmail API.
 
 
-/// Checks whether a token file exists.
 pub async fn check_auth() -> impl Responder {
-    let authenticated = Path::new(TOKEN_CACHE_FILE).exists();
-    HttpResponse::Ok().json(serde_json::json!({ "authenticated": authenticated }))
+    // If the token file doesn't exist, user is not authenticated.
+    if !Path::new(TOKEN_CACHE_FILE).exists() {
+        return HttpResponse::Ok().json(serde_json::json!({ "authenticated": false }));
+    }
+
+    // Attempt a minimal API call (fetch inbox messages) to validate the token.
+    match get_inbox_messages().await {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({ "authenticated": true })),
+        Err(e) if e.to_string().contains("401") => {
+            info!("Access token appears expired. Attempting to refresh...");
+            match refresh_token().await {
+                Ok(_) => HttpResponse::Ok().json(serde_json::json!({ "authenticated": true, "refreshed": true })),
+                Err(err) => HttpResponse::Ok().json(serde_json::json!({
+                    "authenticated": false,
+                    "error": "Failed to refresh token",
+                    "details": err.to_string()
+                }))
+            }
+        },
+        Err(e) => HttpResponse::Ok().json(serde_json::json!({ "authenticated": false, "error": e.to_string() }))
+    }
 }
 
 /// /oauth/login: Builds the Google OAuth URL and redirects the user.
@@ -172,6 +194,7 @@ pub struct Email {
     pub date: Option<String>,
     pub subject: Option<String>,
     pub body: Option<String>,
+    pub message_id: Option<String>,
 }
 
 // Helper function to find a header value (case insensitive) from a slice of headers.
@@ -263,6 +286,7 @@ pub async fn get_inbox_messages() -> Result<Vec<Email>, Box<dyn std::error::Erro
                 let subject = get_header(headers, "Subject");
                 let body_data = extract_plain_text_body(&message["payload"]);
 
+
                 // Decode the base64url-encoded body using the new API.
                 let decoded_body = if let Some(data) = body_data {
                     match URL_SAFE.decode(data) {
@@ -282,6 +306,7 @@ pub async fn get_inbox_messages() -> Result<Vec<Email>, Box<dyn std::error::Erro
                     date,
                     subject,
                     body: decoded_body,
+                    message_id: Some(message_id.to_string()),
                 });
             }
         }
@@ -290,4 +315,43 @@ pub async fn get_inbox_messages() -> Result<Vec<Email>, Box<dyn std::error::Erro
         error!("Failed to fetch inbox: {}", response.status());
         Err(format!("Failed to fetch inbox: {}", response.status()).into())
     }
+}
+
+pub async fn refresh_token() -> Result<(), Box<dyn std::error::Error>> {
+    // Read client secret configuration.
+    let secret_str = fs::read_to_string("./cfg/client_secret.json")?;
+    let json_secret: Value = serde_json::from_str(&secret_str)?;
+    let installed = &json_secret["installed"];
+    let client_id = ClientId::new(installed["client_id"].as_str().unwrap().to_string());
+    let client_secret = ClientSecret::new(installed["client_secret"].as_str().unwrap().to_string());
+    let auth_url = AuthUrl::new(installed["auth_uri"].as_str().unwrap().to_string())
+        .expect("Invalid authorization endpoint URL");
+    let token_url = TokenUrl::new(installed["token_uri"].as_str().unwrap().to_string())
+        .expect("Invalid token endpoint URL");
+
+    let oauth_client = BasicClient::new(client_id, Some(client_secret), auth_url, Some(token_url))
+        .set_redirect_uri(RedirectUrl::new("http://localhost:8080/oauth/callback".to_string())
+            .expect("Invalid redirect URL"));
+
+    // Read the current token cache.
+    let file_content = fs::read_to_string(TOKEN_CACHE_FILE)?;
+    let token_cache: TokenCache = serde_json::from_str(&file_content)?;
+
+    // Ensure we have a refresh token.
+    let current_refresh_token = match token_cache.refresh_token {
+        Some(rt) => rt,
+        None => return Err("No refresh token available. Please re-authenticate.".into())
+    };
+
+    // Perform the refresh token exchange.
+    let new_token = oauth_client
+        .exchange_refresh_token(&RefreshToken::new(current_refresh_token))
+        .request_async(async_http_client)
+        .await?;
+
+    // Overwrite the token cache with the new token information.
+    let token_json = serde_json::to_string(&new_token)?;
+    fs::write(TOKEN_CACHE_FILE, token_json)?;
+    info!("Token successfully refreshed.");
+    Ok(())
 }
