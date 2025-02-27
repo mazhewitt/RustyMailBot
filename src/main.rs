@@ -1,34 +1,32 @@
-// --- Import necessary crates and modules ---
 mod gmail;
-mod memory_session_store;
+mod global_session_manager;
 
-use std::str::from_boxed_utf8_unchecked;
-use actix_files::Files;
-use actix_web::{web, App, HttpResponse, HttpServer, Error};
-use actix_web::middleware::Logger;
-use async_stream::stream;
-use bytes::Bytes;
-use serde_json::Value;
 use std::time::Duration;
-use tokio::time::sleep;
-use log::info;
-use gmail::{check_auth, oauth_login, oauth_callback, get_inbox_messages};
-
-use ollama_rs::Ollama;
-use ollama_rs::generation::chat::ChatMessage;
-use ollama_rs::generation::chat::request::ChatMessageRequest;
-use ollama_rs::generation::embeddings::request::{GenerateEmbeddingsRequest, EmbeddingsInput};
+use actix_files::Files;
+use actix_web::{web, App, HttpResponse, HttpServer};
+use actix_web::middleware::Logger;
+use serde_json::Value;
+use tokio::time::timeout;
+use log::{info, error, warn};
 
 use actix_session::{SessionMiddleware, Session};
-use actix_web::cookie::Key;
+use actix_session::storage::CookieSessionStore;
+use actix_web::cookie::{Key, SameSite};
 use serde::{Deserialize, Serialize};
-use crate::memory_session_store::MemorySessionStore;
+use uuid::Uuid;
+
+use gmail::{check_auth, oauth_login, oauth_callback, get_inbox_messages};
+use ollama_rs::Ollama;
+use ollama_rs::generation::chat::{ChatMessage, request::ChatMessageRequest};
+use ollama_rs::generation::embeddings::request::{GenerateEmbeddingsRequest, EmbeddingsInput};
+use crate::global_session_manager::GlobalSessionManager;
 
 struct AppState {
     ollama: Ollama,
+    session_manager: GlobalSessionManager,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 struct UserSession {
     history: Vec<ChatMessage>,
     mailbox: VectorDatabase,
@@ -44,111 +42,89 @@ impl Default for UserSession {
 }
 
 const MODEL_NAME: &str = "llama3.2";
-
 const EMBEDDING_MODEL: &str = "all-minilm";
 const SYSTEM_PROMPT: &str = "You are a helpful assistant for writing emails";
 
-/// New endpoint to initialize the user session and load the inbox into the vector database.
-
-
+/// Endpoint to initialize the user session and load the inbox into the vector database.
 async fn init_session_endpoint(data: web::Data<AppState>, session: Session) -> HttpResponse {
-    if let Ok(Some(_)) = session.get::<UserSession>("user_session") {
-        return HttpResponse::Ok().json(serde_json::json!({ "initialized": true }));
+    let session_id = Uuid::new_v4().to_string();
+    if let Err(e) = session.insert("session_id", session_id.clone()) {
+        error!("Failed to insert session_id into cookie: {:?}", e);
+    } else {
+        info!("Stored session_id {} in cookie", session_id);
+    }
+
+    // Check if the session already exists (unlikely with a new UUID)
+    if data.session_manager.get(&session_id).is_some() {
+        return HttpResponse::Ok().json(serde_json::json!({ "initialized": true, "session_id": session_id }));
     }
 
     let mut new_session = UserSession::default();
     let mut ollama_instance = data.ollama.clone();
-    info!("Loading emails into vector database");
 
-    // Set a timeout of, say, 60 seconds
-    let load_result = tokio::time::timeout(tokio::time::Duration::from_secs(300), load_emails(&mut ollama_instance)).await;
+    info!("Loading emails into vector database for session {}", session_id);
+    let load_result = timeout(Duration::from_secs(300), load_emails(&mut ollama_instance)).await;
+
     match load_result {
         Ok(result) => match result {
-            Ok(documents) => new_session.mailbox.documents = documents,
+            Ok(documents) => {
+                let email_count = documents.len();
+                new_session.mailbox.documents = documents;
+                info!("Successfully loaded {} emails for session {}", email_count, session_id);
+            },
             Err(e) => {
-                log::error!("Error loading emails: {:?}", e);
+                error!("Error loading emails for session {}: {:?}", session_id, e);
                 return HttpResponse::InternalServerError().json(serde_json::json!({
                     "error": "Failed to load emails",
                     "details": e.to_string()
                 }));
             }
         },
-        Err(e) => {
-            log::error!("Timed out loading emails: {:?}", e);
+        Err(_) => {
+            error!("Timed out loading emails for session {}", session_id);
             return HttpResponse::InternalServerError().json(serde_json::json!({
                 "error": "Loading emails timed out"
             }));
         }
     }
 
-    if let Err(e) = session.insert("user_session", &new_session) {
-        log::error!("Failed to save session: {:?}", e);
-        return HttpResponse::InternalServerError().json(serde_json::json!({
-            "error": "Failed to save session",
-            "details": e.to_string()
-        }));
-    }
-    info!("Initialized user session");
-    HttpResponse::Ok().json(serde_json::json!({ "initialized": true }))
+    data.session_manager.insert(session_id.clone(), new_session);
+    info!("Initialized user session: {}", session_id);
+
+    HttpResponse::Ok().json(serde_json::json!({ "initialized": true, "session_id": session_id }))
 }
 
-/// Updated load_emails function that populates the vector database with real embeddings.
+/// Load emails from Gmail and generate embeddings.
 pub async fn load_emails(ollama: &mut Ollama) -> Result<Vec<Document>, Box<dyn std::error::Error>> {
     let emails = get_inbox_messages().await?;
     let mut documents = Vec::new();
 
     for email in emails {
-        let id = email.message_id.unwrap_or_default().clone();
+        let id = email.message_id.unwrap_or_default();
         let text = format!(
             "Message:{}\nFrom: {}\nTo: {}\nDate: {}\nSubject: {}\n\n{}",
-            id.clone(),
+            id,
             email.from.unwrap_or_default(),
             email.to.unwrap_or_default(),
             email.date.unwrap_or_default(),
             email.subject.unwrap_or_default(),
             email.body.unwrap_or_default()
         );
-        info!("Getting embeddings for email: {}", id);
-        let embedding = fetch_embedding(ollama, text.as_str()).await?;
+        info!("Generating embedding for email: {}", id);
+        let embedding = fetch_embedding(ollama, &text).await?;
         documents.push(embedding);
     }
     Ok(documents)
 }
 
-#[actix_web::main]
-async fn main() -> std::io::Result<()> {
-    env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
-    info!("Starting server on http://127.0.0.1:8080");
-
-    let ollama = Ollama::new("http://localhost", 11434);
-    let secret_key: [u8; 64] = *b"0123456789012345678901234567890123456789012345678901234567890123";
-    HttpServer::new(move || {
-        App::new()
-            .app_data(web::Data::new(AppState { ollama: ollama.clone() }))
-            .wrap(Logger::default())
-            .wrap(SessionMiddleware::new(
-                MemorySessionStore::new(),
-                Key::try_from(&secret_key[..]).unwrap(),
-            ))
-            .route("/init_session", web::get().to(init_session_endpoint))
-            .route("/stream", web::post().to(stream_greeting))
-            .route("/check_auth", web::get().to(check_auth))
-            .route("/oauth/login", web::get().to(oauth_login))
-            .route("/oauth/callback", web::get().to(oauth_callback))
-            .service(Files::new("/", "./static").index_file("index.html"))
-    })
-        .bind(("127.0.0.1", 8080))?
-        .run()
-        .await
-}
-
+/// Document structure for embeddings.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Document {
     pub text: String,
     pub embedding: Vec<f32>,
 }
 
-/// A simple vector database that indexes documents by their embeddings.
+/// A simple vector database for documents.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct VectorDatabase {
     pub documents: Vec<Document>,
@@ -159,16 +135,14 @@ impl VectorDatabase {
         Self { documents: Vec::new() }
     }
 
-    /// Insert a document into the database using the Ollama embeddings API.
     pub async fn insert(&mut self, text: String, ollama: &mut Ollama) -> Result<(), Box<dyn std::error::Error>> {
-        let embedding = fetch_embedding( ollama, &text).await?;
+        let embedding = fetch_embedding(ollama, &text).await?;
         self.documents.push(embedding);
         Ok(())
     }
 
-    /// Search for the top_n most similar documents to the query.
     pub async fn search(&self, query: &str, top_n: usize, ollama: &mut Ollama) -> Result<Vec<&Document>, Box<dyn std::error::Error>> {
-        let query_embedding = fetch_embedding( ollama, query).await?;
+        let query_embedding = fetch_embedding(ollama, query).await?;
         let mut results: Vec<(&Document, f32)> = self.documents.iter()
             .map(|doc| (doc, cosine_similarity(&doc.embedding, &query_embedding.embedding)))
             .collect();
@@ -176,7 +150,6 @@ impl VectorDatabase {
         Ok(results.into_iter().take(top_n).map(|(doc, _)| doc).collect())
     }
 
-    /// Return the concatenated text of the top_n most similar documents.
     pub async fn get_context(&self, query: &str, top_n: usize, ollama: &mut Ollama) -> Result<String, Box<dyn std::error::Error>> {
         let results = self.search(query, top_n, ollama).await?;
         let context: Vec<String> = results.iter().map(|doc| doc.text.clone()).collect();
@@ -184,23 +157,21 @@ impl VectorDatabase {
     }
 }
 
-/// Generate an embedding for the provided text using the Ollama embeddings API.
+/// Generate an embedding using Ollama.
 async fn fetch_embedding(ollama: &Ollama, text: &str) -> Result<Document, Box<dyn std::error::Error>> {
     let request = GenerateEmbeddingsRequest::new(
         EMBEDDING_MODEL.to_string(),
         EmbeddingsInput::Single(text.to_string()),
     );
-
     let res = ollama.generate_embeddings(request).await?;
     let embedding = res.embeddings.into_iter().next().ok_or("No embeddings returned")?;
-
     Ok(Document {
         text: text.to_string(),
         embedding,
     })
 }
 
-/// A simple cosine similarity implementation.
+/// Cosine similarity between two embeddings.
 fn cosine_similarity(a: &Vec<f32>, b: &Vec<f32>) -> f32 {
     let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
     let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
@@ -208,85 +179,119 @@ fn cosine_similarity(a: &Vec<f32>, b: &Vec<f32>) -> f32 {
     if norm_a == 0.0 || norm_b == 0.0 { 0.0 } else { dot / (norm_a * norm_b) }
 }
 
-/// Refine a query using the Ollama chat API.
+/// Refine the user query using Ollama chat.
 async fn refine_query(original_query: &str, ollama: &mut Ollama) -> Result<String, Box<dyn std::error::Error>> {
     let refinement_prompt = format!(
         "Given the following instruction, extract the key details to search for relevant emails:\n\nInstruction: {}\n\nRefined Query:",
         original_query
     );
-
     let mut conversation = vec![
         ChatMessage::system("You are an expert at extracting key information from instructions.".to_string()),
         ChatMessage::user(refinement_prompt),
     ];
-
     let request = ChatMessageRequest::new(MODEL_NAME.to_string(), vec![]);
     let response = ollama.send_chat_messages_with_history(&mut conversation, request).await?;
     Ok(response.message.content.trim().to_string())
 }
 
-/// The existing streaming endpoint (now assuming session is pre‐initialized).
+/// Streaming endpoint to handle user messages.
 async fn stream_greeting(data: web::Data<AppState>, session: Session, req_body: web::Json<Value>) -> HttpResponse {
-    let maybe_session = session.get::<UserSession>("user_session");
-    let mut user_session = if let Ok(Some(session_data)) = maybe_session {
-        session_data
+    // Retrieve the session ID from the cookie (fallback to request body if necessary)
+    let session_id = if let Ok(Some(id)) = session.get::<String>("session_id") {
+        id
     } else {
-        // In case the session is missing, return an error.
-        return HttpResponse::InternalServerError().json(serde_json::json!({"error": "Session not initialized"}));
+        warn!("No valid session_id found in cookie; falling back to request body");
+        req_body["session_id"].as_str().unwrap_or_default().to_string()
     };
 
-    info!("Received request with payload: {:?}", req_body);
-    let user_input = req_body["message"].as_str().unwrap_or_default().to_string();
-    session.insert("user_session", &user_session).unwrap();
+    info!("Stream Greeting on session: {}", session_id);
 
-    if user_input.trim() == "@list" {
-        info!("Streaming inbox messages with @list");
-        let inbox_stream = stream! {
-            match get_inbox_messages().await {
-                Ok(messages) => {
-                    for message in messages {
-                        if let Ok(json_message) = serde_json::to_string(&message) {
-                            yield Ok(Bytes::from(json_message + "\n"));
-                        } else {
-                            yield Err(actix_web::error::ErrorInternalServerError("Serialization error"));
-                        }
-                    }
-                },
-                Err(e) => yield Err(actix_web::error::ErrorInternalServerError(e)),
+    if let Some(mut user_session) = data.session_manager.get(&session_id) {
+        let user_input = req_body["message"].as_str().unwrap_or_default().to_string();
+        info!("Processing message for session {}: {}", session_id, user_input);
+
+        let refined_query = match refine_query(&user_input, &mut data.ollama.clone()).await {
+            Ok(q) => {
+                info!("Refined query for session {}: {}", session_id, q);
+                q
+            },
+            Err(e) => {
+                error!("Error refining query for session {}: {:?}", session_id, e);
+                return HttpResponse::InternalServerError().json(serde_json::json!({"error": "Query refinement failed"}));
             }
         };
 
-        let refined_query = refine_query(&user_input, &mut data.ollama.clone()).await.unwrap();
-        println!("Refined Query: {}", refined_query);
-
-        let context_str = user_session.mailbox.get_context(&refined_query, 2, &mut data.ollama.clone()).await.unwrap();
-        println!("Retrieved Context:\n{}", context_str);
+        let context_str = match user_session.mailbox.get_context(&refined_query, 2, &mut data.ollama.clone()).await {
+            Ok(ctx) => {
+                info!("Retrieved context for session {}: {}", session_id, ctx);
+                ctx
+            },
+            Err(e) => {
+                error!("Error retrieving context for session {}: {:?}", session_id, e);
+                return HttpResponse::InternalServerError().json(serde_json::json!({"error": "Context retrieval failed"}));
+            }
+        };
 
         let conversation = vec![
             ChatMessage::system(SYSTEM_PROMPT.to_string()),
             ChatMessage::system(format!("Context from emails:\n{}", context_str)),
-            ChatMessage::user(user_input.to_string()),
+            ChatMessage::user(user_input.clone()),
         ];
 
         let request = ChatMessageRequest::new(MODEL_NAME.to_string(), conversation);
         let mut local_ollama = data.ollama.clone();
-        let response = local_ollama.send_chat_messages_with_history(&mut user_session.history, request).await.unwrap();
-        println!("{}", response.message.content);
+        let response = match local_ollama.send_chat_messages_with_history(&mut user_session.history, request).await {
+            Ok(resp) => resp,
+            Err(e) => {
+                error!("Error processing chat for session {}: {:?}", session_id, e);
+                return HttpResponse::InternalServerError().json(serde_json::json!({"error": "Chat processing failed"}));
+            }
+        };
 
-        return HttpResponse::Ok()
-            .content_type("application/json")
-            .streaming(inbox_stream);
+        info!("Response for session {}: {}", session_id, response.message.content);
+
+        // Update the session after processing
+        data.session_manager.insert(session_id.clone(), user_session);
+        HttpResponse::Ok().json(serde_json::json!({"response": response.message.content}))
+    } else {
+        error!("Session \"{}\" not found!", session_id);
+        HttpResponse::InternalServerError().json(serde_json::json!({"error": "Session not initialized"}))
     }
+}
 
-    let greeting_stream = stream! {
-        info!("Streaming chunk: 'hello '");
-        yield Ok::<_, Error>(Bytes::from("hello "));
-        sleep(Duration::from_millis(500)).await;
-        info!("Streaming chunk: '{}'", user_input);
-        yield Ok(Bytes::from(user_input));
-    };
+#[actix_web::main]
+async fn main() -> std::io::Result<()> {
+    // Initialize logging.
+    env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
+    info!("Starting server on http://127.0.0.1:8080");
 
-    HttpResponse::Ok()
-        .content_type("text/plain")
-        .streaming(greeting_stream)
+    // Use a fixed secret key so that session cookies remain valid.
+    let secret_key = Key::from("0123456789012345678901234567890123456789012345678901234567890123".as_bytes());
+
+    let ollama = Ollama::new("http://localhost", 11434);
+    let session_manager = GlobalSessionManager::new();
+
+    HttpServer::new(move || {
+        App::new()
+            .app_data(web::Data::new(AppState {
+                ollama: ollama.clone(),
+                session_manager: session_manager.clone(),
+            }))
+            .wrap(Logger::default())
+            .wrap(
+                SessionMiddleware::builder(CookieSessionStore::default(), secret_key.clone())
+                    .cookie_secure(false)      // allow cookies over HTTP (development)
+                    .cookie_same_site(SameSite::Lax)
+                    .build()
+            )
+            .route("/init_session", web::get().to(init_session_endpoint))
+            .route("/stream", web::post().to(stream_greeting))
+            .route("/check_auth", web::get().to(check_auth))
+            .route("/oauth/login", web::get().to(oauth_login))
+            .route("/oauth/callback", web::get().to(oauth_callback))
+            .service(Files::new("/", "./static").index_file("index.html"))
+    })
+        .bind(("127.0.0.1", 8080))?
+        .run()
+        .await
 }
