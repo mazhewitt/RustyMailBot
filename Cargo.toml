@@ -21,3 +21,6 @@ actix-session = { version = "0.10.1", features = ["cookie-session"] }
 uuid = { version = "1.14.0", features = ["v4"] }
 anyhow = "1.0.96"
 futures = "0.3.31"
+chrono = "0.4.39"
+regex = "1.11.1"
+lazy_static = "1.5.0"
