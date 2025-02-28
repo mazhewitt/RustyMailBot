@@ -13,7 +13,7 @@ use log::info;
 use routes::app_state::AppState;
 use config::init_logging;
 use services::{email_service, embedding_service};
-use crate::routes::app_state::DummyAppState;
+
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {

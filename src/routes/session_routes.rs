@@ -1,11 +1,8 @@
 use actix_web::{get, web, HttpResponse, Responder};
-use crate::routes::app_state::{AppState, DummyAppState};
+use crate::routes::app_state::{AppState};
 use actix_session::Session;
 use serde_json::json;
-use log::{info, error};
-use uuid::Uuid;
-use crate::models::user_session::UserSession;
-use crate::services::email_service;
+use log::{error};
 
 pub fn init_routes(cfg: &mut web::ServiceConfig) {
     cfg.service(init_session);

@@ -1,7 +1,6 @@
-use actix_web::{post, web, HttpResponse, Responder};
+use actix_web::{post, web, Responder};
 use actix_session::Session;
 use serde_json::Value;
-use log::warn;
 
 pub fn init_routes(cfg: &mut web::ServiceConfig) {
     cfg.service(stream_greeting);

@@ -3,9 +3,9 @@ use reqwest;
 use serde::{Serialize, Deserialize};
 use serde_json::Value;
 use std::fs;
-use std::path::Path;
 use std::time::Duration;
 use base64::{engine::general_purpose::URL_SAFE, Engine as _};
+use oauth2::TokenResponse;
 
 const TOKEN_CACHE_FILE: &str = "tokencache.json";
 const GMAIL_API_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/messages?q=is:inbox";
@@ -153,7 +153,7 @@ pub async fn get_inbox_messages() -> Result<Vec<Email>, Box<dyn std::error::Erro
 /// logic operation that should not build HTTP responses itself.
 pub async fn refresh_token(
     oauth_client: &oauth2::basic::BasicClient,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<String, Box<dyn std::error::Error>> {
     // Read the current token cache.
     let file_content = fs::read_to_string(TOKEN_CACHE_FILE)?;
     let token_cache: TokenCache = serde_json::from_str(&file_content)?;
@@ -174,7 +174,9 @@ pub async fn refresh_token(
     let token_json = serde_json::to_string(&new_token)?;
     fs::write(TOKEN_CACHE_FILE, token_json)?;
     info!("Token successfully refreshed.");
-    Ok(())
+
+    // Return the new access token.
+    Ok(new_token.access_token().secret().to_string())
 }
 
 /// Helper: find a header value (case insensitive) from a slice of headers.
