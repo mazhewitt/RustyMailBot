@@ -12,3 +12,8 @@ impl AppState {
         Self { ollama, session_manager }
     }
 }
+
+#[derive(Clone)]
+pub struct DummyAppState {
+    pub dummy: usize,
+}

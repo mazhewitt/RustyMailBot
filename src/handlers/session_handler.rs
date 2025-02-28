@@ -9,8 +9,9 @@ use crate::services::email_service;
 
 pub async fn initialize_session(
     data: web::Data<AppState>,
-    session: Session
+    session: Session,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    // Generate a new session ID and store it in the cookie.
     let session_id = Uuid::new_v4().to_string();
     if let Err(e) = session.insert("session_id", session_id.clone()) {
         error!("Failed to insert session_id into cookie: {:?}", e);
@@ -18,6 +19,7 @@ pub async fn initialize_session(
         info!("Stored session_id {} in cookie", session_id);
     }
 
+    // Check if the session already exists (unlikely with a new UUID)
     if data.session_manager.get(&session_id).is_some() {
         return Ok(json!({ "initialized": true, "session_id": session_id }));
     }
@@ -26,7 +28,16 @@ pub async fn initialize_session(
     let mut ollama_instance = data.ollama.clone();
 
     info!("Loading emails into vector database for session {}", session_id);
-    let documents = email_service::load_emails(&mut ollama_instance).await?;
+    // Attempt to load emails
+    let documents = match email_service::load_emails(&mut ollama_instance).await {
+        Ok(docs) => docs,
+        Err(e) => {
+            error!("Error loading emails for session {}: {:?}", session_id, e);
+            // Return a valid JSON error response
+            return Err(format!("Failed to load emails: {}", e).into());
+        }
+    };
+
     let email_count = documents.len();
     new_session.mailbox.documents = documents;
     info!("Successfully loaded {} emails for session {}", email_count, session_id);

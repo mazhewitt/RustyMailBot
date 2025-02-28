@@ -1,4 +1,4 @@
-use log::{info, error};
+use log::{info, error, debug};
 use reqwest;
 use serde::{Serialize, Deserialize};
 use serde_json::Value;
@@ -79,7 +79,7 @@ pub async fn get_inbox_messages() -> Result<Vec<Email>, Box<dyn std::error::Erro
         .await?;
 
     if response.status().is_success() {
-        info!("Successfully fetched inbox messages");
+        info!("Successfully fetched inbox ID list");
         let messages_response: Value = response.json().await?;
         let message_ids: Vec<String> = messages_response["messages"]
             .as_array()
@@ -89,12 +89,13 @@ pub async fn get_inbox_messages() -> Result<Vec<Email>, Box<dyn std::error::Erro
             .collect();
 
         let mut emails = Vec::new();
+        info!("Loading email details");
         for message_id in message_ids.iter() {
             let message_url = format!(
                 "https://gmail.googleapis.com/gmail/v1/users/me/messages/{}",
                 message_id
             );
-            info!("Fetching message details for ID: {}", message_id);
+            debug!("Fetching message details for ID: {}", message_id);
             let message_response = client
                 .get(&message_url)
                 .bearer_auth(&access_token)
@@ -102,7 +103,7 @@ pub async fn get_inbox_messages() -> Result<Vec<Email>, Box<dyn std::error::Erro
                 .await?;
 
             if message_response.status().is_success() {
-                info!("Successfully fetched message details for ID: {}", message_id);
+                debug!("Successfully fetched message details for ID: {}", message_id);
                 let message: Value = message_response.json().await?;
                 let headers: &[Value] = message["payload"]["headers"]
                     .as_array()

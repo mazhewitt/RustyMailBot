@@ -5,9 +5,10 @@ use crate::services::embedding_service;
 use ollama_rs::Ollama;
 
 pub async fn load_emails(ollama: &mut Ollama) -> Result<Vec<Document>, Box<dyn std::error::Error>> {
+    info!("Load email Handler Called...");
     let emails = gmail_service::get_inbox_messages().await?;
     let mut documents = Vec::new();
-
+    info!("Loading emails into vector database...");
     for email in emails {
         let id = email.message_id.unwrap_or_default();
         let text = format!(

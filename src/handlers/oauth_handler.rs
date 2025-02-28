@@ -9,7 +9,8 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
 use log::{info, error};
-use crate::services::gmail_service;
+
+use crate::services::gmail_service::{read_access_token, refresh_token};
 
 const GMAIL_SCOPE: &str = "https://www.googleapis.com/auth/gmail.readonly";
 
@@ -99,19 +100,67 @@ pub async fn oauth_callback(req: HttpRequest) -> impl Responder {
     }
 
 }
+/// Checks the current authentication status by calling Gmail's profile endpoint.
+/// If the token appears expired, it attempts to refresh it before reporting the status.
 pub async fn check_auth() -> impl Responder {
-    // If token file doesn't exist, we're unauthenticated.
+
+    info!("checking the auth token");
+    // If the token file doesn't exist, we're not authenticated.
     if !Path::new("tokencache.json").exists() {
         return HttpResponse::Ok().json(json!({ "authenticated": false }));
     }
 
-    // Try fetching inbox messages to test the token.
-    match gmail_service::get_inbox_messages().await {
-        Ok(_) => HttpResponse::Ok().json(json!({ "authenticated": true })),
-        Err(e) if e.to_string().contains("401") => {
-            info!("Token appears expired.");
-            HttpResponse::Ok().json(json!({ "authenticated": false, "error": "Token expired" }))
+    // Attempt to read the current access token.
+    let access_token = match read_access_token() {
+        Ok(token) => token,
+        Err(err) => {
+            error!("Error reading token: {}", err);
+            return HttpResponse::Ok().json(json!({ "authenticated": false, "error": err.to_string() }));
+        }
+    };
+
+    let client = reqwest::Client::new();
+    let profile_url = "https://gmail.googleapis.com/gmail/v1/users/me/profile";
+
+    // Make a lightweight call to the Gmail profile endpoint.
+    match client.get(profile_url).bearer_auth(&access_token).send().await {
+        Ok(res) if res.status().is_success() => {
+            info!("Auth token is good");
+            HttpResponse::Ok().json(json!({ "authenticated": true }))
         },
-        Err(e) => HttpResponse::Ok().json(json!({ "authenticated": false, "error": e.to_string() }))
+        Ok(res) if res.status().as_u16() == 401 => {
+            info!("Access token appears expired, attempting refresh...");
+
+            // Build an OAuth client using the helper from oauth_handler.
+            let oauth_client = build_oauth_client();
+
+            // Attempt to refresh the token.
+            match refresh_token(&oauth_client).await {
+                Ok(_) => {
+                    // After refresh, read the new token and test again.
+                    match read_access_token() {
+                        Ok(new_token) => match client.get(profile_url).bearer_auth(&new_token).send().await {
+                            Ok(r) if r.status().is_success() => {
+                                HttpResponse::Ok().json(json!({ "authenticated": true, "refreshed": true }))
+                            },
+                            Ok(r) => HttpResponse::Ok().json(json!({
+                                "authenticated": false,
+                                "error": format!("Unexpected status after refresh: {}", r.status())
+                            })),
+                            Err(e) => HttpResponse::Ok().json(json!({ "authenticated": false, "error": e.to_string() }))
+                        },
+                        Err(e) => HttpResponse::Ok().json(json!({ "authenticated": false, "error": e.to_string() }))
+                    }
+                },
+                Err(e) => HttpResponse::Ok().json(json!({ "authenticated": false, "error": e.to_string() }))
+            }
+        },
+        Ok(res) => {
+            HttpResponse::Ok().json(json!({
+                "authenticated": false,
+                "error": format!("Unexpected status: {}", res.status())
+            }))
+        },
+        Err(e) => HttpResponse::Ok().json(json!({ "authenticated": false, "error": e.to_string() })),
     }
 }
