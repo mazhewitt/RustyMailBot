@@ -101,21 +101,18 @@
             }
         }, [messages]);
 
-        // On startup, initialize the session
         useEffect(() => {
             fetch("/init_session")
-                .then(async (res) => {
-                    const text = await res.text();
-                    try {
-                        const data = JSON.parse(text);
-                        // Use data...
-                    } catch (e) {
-                        console.error("Failed to parse JSON. Raw response:", text);
-                        throw e;
+                .then(res => res.json())
+                .then(data => {
+                    if (data.initialized) {
+                        setMessages(prev => [...prev, { sender: "system", text: "Inbox loaded successfully." }]);
+                        setLoading(false);
                     }
                 })
                 .catch(err => {
                     console.error("Error initializing session:", err);
+                    setMessages(prev => [...prev, { sender: "system", text: "Error initializing inbox." }]);
                 });
         }, []);
 
