@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use uuid::Uuid;
-use crate::UserSession;
+use crate::models::user_session::UserSession;
 
 #[derive(Clone)]
 pub struct GlobalSessionManager {
