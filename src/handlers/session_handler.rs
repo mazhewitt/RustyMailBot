@@ -5,6 +5,7 @@ use log::{info, error};
 use serde_json::json;
 use crate::routes::app_state::AppState;
 use crate::models::user_session::UserSession;
+use crate::models::email_db::EmailDB;
 use crate::services::email_service;
 
 pub async fn initialize_session(
@@ -24,12 +25,16 @@ pub async fn initialize_session(
         return Ok(json!({ "initialized": true, "session_id": session_id }));
     }
 
-    let mut new_session = UserSession::default();
+    let mut new_session = UserSession {
+        history: Vec::new(),
+        mailbox: EmailDB::default().await?,
+    };
+
     let mut ollama_instance = data.ollama.clone();
 
     info!("Loading emails into vector database for session {}", session_id);
     // Attempt to load emails
-    let documents = match email_service::load_emails(&mut ollama_instance).await {
+    let emails = match email_service::load_emails(&mut ollama_instance).await {
         Ok(docs) => docs,
         Err(e) => {
             error!("Error loading emails for session {}: {:?}", session_id, e);
@@ -38,8 +43,8 @@ pub async fn initialize_session(
         }
     };
 
-    let email_count = documents.len();
-    new_session.mailbox.documents = documents;
+    let email_count = emails.len();
+    new_session.mailbox.store_emails(&emails).await?;
     info!("Successfully loaded {} emails for session {}", email_count, session_id);
 
     data.session_manager.insert(session_id.clone(), new_session);

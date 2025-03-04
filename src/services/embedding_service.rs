@@ -1,21 +1,9 @@
 use ollama_rs::Ollama;
-use crate::models::vector_database::Document;
+use crate::models::email::Email;
 use crate::config::{EMBEDDING_MODEL, MODEL_NAME};
 use ollama_rs::generation::embeddings::request::{GenerateEmbeddingsRequest, EmbeddingsInput};
 use ollama_rs::generation::chat::{ChatMessage, request::ChatMessageRequest};
 
-pub async fn fetch_embedding(ollama: &Ollama, text: &str) -> Result<Document, Box<dyn std::error::Error>> {
-    let request = GenerateEmbeddingsRequest::new(
-        EMBEDDING_MODEL.to_string(),
-        EmbeddingsInput::Single(text.to_string()),
-    );
-    let res = ollama.generate_embeddings(request).await?;
-    let embedding = res.embeddings.into_iter().next().ok_or("No embeddings returned")?;
-    Ok(Document {
-        text: text.to_string(),
-        embedding,
-    })
-}
 
 pub async fn refine_query(original_query: &str, ollama: &mut Ollama) -> Result<String, Box<dyn std::error::Error>> {
     let refinement_prompt = format!(

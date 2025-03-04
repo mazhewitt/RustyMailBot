@@ -21,7 +21,6 @@ pub struct QueryCriteria {
     pub subject: Option<String>,
     pub date_from: Option<DateTime<Utc>>,
     pub date_to: Option<DateTime<Utc>>,
-    pub has_attachment: Option<bool>,
     pub raw_query: String,
     pub llm_confidence: f32,  // 0.0 to 1.0 indicating LLM's confidence in query understanding
 }
@@ -35,7 +34,6 @@ impl QueryCriteria {
             subject: None,
             date_from: None,
             date_to: None,
-            has_attachment: None,
             raw_query: raw_query.to_string(),
             llm_confidence: 0.0,
         }
@@ -76,12 +74,6 @@ impl QueryCriteria {
             }
         }
 
-        // Match attachments
-        if let Some(has_attachment) = self.has_attachment {
-            if has_attachment && email.has_attachments != has_attachment {
-                return false;
-            }
-        }
 
         // Match keywords (at least one keyword must match either subject or content)
         if !self.keywords.is_empty() {
@@ -231,7 +223,6 @@ fn extract_criteria_with_regex(query: &str) -> QueryCriteria {
     if query_lower.contains("with attachment") ||
         query_lower.contains("has attachment") ||
         query_lower.contains("containing attachment") {
-        criteria.has_attachment = Some(true);
     }
 
     // Extract keywords, removing common words and already processed special terms
@@ -348,7 +339,6 @@ async fn enhance_criteria_with_llm(
     llm_criteria.to = analysis.to;
     llm_criteria.subject = analysis.subject;
     llm_criteria.keywords = analysis.keywords;
-    llm_criteria.has_attachment = analysis.has_attachment;
     llm_criteria.llm_confidence = analysis.confidence;
 
     // Parse date strings
@@ -388,9 +378,6 @@ fn enrich_regex_with_llm(regex_criteria: QueryCriteria, llm_criteria: QueryCrite
         final_criteria.date_to = llm_criteria.date_to;
     }
 
-    if final_criteria.has_attachment.is_none() && llm_criteria.has_attachment.is_some() {
-        final_criteria.has_attachment = llm_criteria.has_attachment;
-    }
 
     // Combine keywords from both sources, removing duplicates
     let mut all_keywords = final_criteria.keywords;
@@ -642,7 +629,6 @@ mod tests {
         assert!(criteria.subject.is_none());
         assert!(criteria.date_from.is_none());
         assert!(criteria.date_to.is_none());
-        assert!(criteria.has_attachment.is_none());
         assert_eq!(criteria.llm_confidence, 0.0);
     }
 

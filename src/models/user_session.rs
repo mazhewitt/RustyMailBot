@@ -1,19 +1,11 @@
 use serde::{Serialize, Deserialize};
-use crate::models::vector_database::VectorDatabase;
+use crate::models::email_db::EmailDB;
 use ollama_rs::generation::chat::ChatMessage;
 use crate::config::SYSTEM_PROMPT;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct UserSession {
     pub history: Vec<ChatMessage>,
-    pub mailbox: VectorDatabase,
+    pub mailbox: EmailDB,
 }
 
-impl Default for UserSession {
-    fn default() -> Self {
-        Self {
-            history: vec![ChatMessage::system(SYSTEM_PROMPT.to_string())],
-            mailbox: VectorDatabase::new(),
-        }
-    }
-}

@@ -5,6 +5,7 @@ use log::info;
 use ollama_rs::Ollama;
 use ollama_rs::generation::chat::{ChatMessage, request::ChatMessageRequest};
 use serde::{Deserialize, Serialize};
+use crate::models::email::format_emails;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Intent {
@@ -110,11 +111,10 @@ pub async fn process_chat(
     info!("Refined query: {}", refined_query);
 
     // Retrieve context from the mailbox
-    let context_str = user_session.mailbox.get_context(&refined_query, 2, &mut ollama).await?;
-    info!("Retrieved context: {}", context_str);
+    let context_emails = user_session.mailbox.search_emails(&refined_query).await?;
 
     // Handle the intent
-    handle_intent(&intent, user_input, user_session, &mut ollama, &context_str).await
+    handle_intent(&intent, user_input, user_session, &mut ollama, &*format_emails(&context_emails)).await
 }
 
 /// Handle the different types of intents

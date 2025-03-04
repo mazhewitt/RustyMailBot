@@ -6,6 +6,7 @@ use std::fs;
 use std::time::Duration;
 use base64::{engine::general_purpose::URL_SAFE, Engine as _};
 use oauth2::TokenResponse;
+use crate::models::email::Email;
 
 const TOKEN_CACHE_FILE: &str = "tokencache.json";
 const GMAIL_API_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/messages?q=is:inbox";
@@ -46,15 +47,7 @@ pub struct MessageBody {
 }
 
 /// A simplified Email struct.
-#[derive(Debug, Serialize)]
-pub struct Email {
-    pub from: Option<String>,
-    pub to: Option<String>,
-    pub date: Option<String>,
-    pub subject: Option<String>,
-    pub body: Option<String>,
-    pub message_id: Option<String>,
-}
+
 
 /// Reads the access token from the cache file.
 pub fn read_access_token() -> Result<String, Box<dyn std::error::Error>> {

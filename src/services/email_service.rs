@@ -1,30 +1,12 @@
 use log::info;
-use crate::models::vector_database::Document;
 use crate::services::gmail_service;
-use crate::services::embedding_service;
 use ollama_rs::Ollama;
+use crate::models::email::Email;
 
-pub async fn load_emails(ollama: &mut Ollama) -> Result<Vec<Document>, Box<dyn std::error::Error>> {
+pub async fn load_emails(ollama: &mut Ollama) -> Result<Vec<Email>, Box<dyn std::error::Error>> {
     info!("Load email Handler Called...");
     let emails = gmail_service::get_inbox_messages().await?;
-    let mut documents = Vec::new();
-    info!("Loading emails into vector database...");
-    for email in emails {
-        let id = email.message_id.unwrap_or_default();
-        let text = format!(
-            "Message:{}\nFrom: {}\nTo: {}\nDate: {}\nSubject: {}\n\n{}",
-            id,
-            email.from.unwrap_or_default(),
-            email.to.unwrap_or_default(),
-            email.date.unwrap_or_default(),
-            email.subject.unwrap_or_default(),
-            email.body.unwrap_or_default()
-        );
-        info!("Generating embedding for email: {}", id);
-        let embedding = embedding_service::fetch_embedding(ollama, &text).await?;
-        documents.push(embedding);
-    }
-    Ok(documents)
+    Ok(emails)
 }
 
 // Creates a new session manager instance.
