@@ -1,9 +1,8 @@
 use log::info;
 use crate::services::gmail_service;
-use ollama_rs::Ollama;
 use crate::models::email::Email;
 
-pub async fn load_emails(ollama: &mut Ollama) -> Result<Vec<Email>, Box<dyn std::error::Error>> {
+pub async fn load_emails() -> Result<Vec<Email>, Box<dyn std::error::Error>> {
     info!("Load email Handler Called...");
     let emails = gmail_service::get_inbox_messages().await?;
     Ok(emails)

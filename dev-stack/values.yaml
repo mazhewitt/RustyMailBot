@@ -17,4 +17,4 @@ ollama:
   replicas: 1
   service:
     type: LoadBalancer
-    port: 11434
+    port: 11435

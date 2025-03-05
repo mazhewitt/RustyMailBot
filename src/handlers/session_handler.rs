@@ -25,16 +25,14 @@ pub async fn initialize_session(
         return Ok(json!({ "initialized": true, "session_id": session_id }));
     }
 
-    let mut new_session = UserSession {
+    let new_session = UserSession {
         history: Vec::new(),
         mailbox: EmailDB::default().await?,
     };
 
-    let mut ollama_instance = data.ollama.clone();
-
     info!("Loading emails into vector database for session {}", session_id);
     // Attempt to load emails
-    let emails = match email_service::load_emails(&mut ollama_instance).await {
+    let emails = match email_service::load_emails().await {
         Ok(docs) => docs,
         Err(e) => {
             error!("Error loading emails for session {}: {:?}", session_id, e);

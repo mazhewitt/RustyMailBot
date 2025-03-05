@@ -246,7 +246,7 @@ fn extract_criteria_with_regex(query: &str) -> QueryCriteria {
 
 async fn enhance_criteria_with_llm(
     query: &str,
-    regex_criteria: &QueryCriteria,
+    _regex_criteria: &QueryCriteria,
     config: &QuerySystemConfig
 ) -> Result<QueryCriteria> {
     // Create an Ollama client

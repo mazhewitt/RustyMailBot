@@ -1,9 +1,7 @@
 use ollama_rs::Ollama;
-use crate::models::email::Email;
-use crate::config::{EMBEDDING_MODEL, MODEL_NAME};
-use ollama_rs::generation::embeddings::request::{GenerateEmbeddingsRequest, EmbeddingsInput};
-use ollama_rs::generation::chat::{ChatMessage, request::ChatMessageRequest};
-
+use crate::config::MODEL_NAME;
+use ollama_rs::generation::chat::{request::ChatMessageRequest, ChatMessage};
+use crate::config;
 
 pub async fn refine_query(original_query: &str, ollama: &mut Ollama) -> Result<String, Box<dyn std::error::Error>> {
     let refinement_prompt = format!(
@@ -20,5 +18,6 @@ pub async fn refine_query(original_query: &str, ollama: &mut Ollama) -> Result<S
 }
 
 pub fn create_ollama() -> Ollama {
-    Ollama::new("http://localhost", 11434)
+    Ollama::new(config::ollama_host(), config::ollama_port())
 }
+

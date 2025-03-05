@@ -36,11 +36,7 @@ impl fmt::Display for Email {
     }
 }
 
-impl Email {
-    pub fn to_pretty_json(&self) -> String {
-        serde_json::to_string_pretty(self).unwrap_or_else(|_| "Error serializing Email".to_string())
-    }
-}
+
 
 pub fn format_emails(emails: &[Email]) -> String {
     emails.iter()

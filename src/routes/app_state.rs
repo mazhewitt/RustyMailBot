@@ -7,8 +7,3 @@ pub struct AppState {
     pub session_manager: GlobalSessionManager,
 }
 
-impl AppState {
-    pub fn new(ollama: Ollama, session_manager: GlobalSessionManager) -> Self {
-        Self { ollama, session_manager }
-    }
-}
