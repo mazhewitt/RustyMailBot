@@ -1,0 +1,20 @@
+# Default values for dev-stack.
+
+meilisearch:
+  enabled: true
+  image: getmeili/meilisearch:latest
+  replicas: 1
+  service:
+    type: LoadBalancer
+    port: 7700
+  env:
+    MEILI_ENV: "development"
+    MEILI_MASTER_KEY: "dev-key"
+
+ollama:
+  enabled: true
+  image: ollama/ollama:latest
+  replicas: 1
+  service:
+    type: LoadBalancer
+    port: 11434

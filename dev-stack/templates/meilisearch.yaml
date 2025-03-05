@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: meilisearch
+spec:
+  replicas: {{ .Values.meilisearch.replicas }}
+  selector:
+    matchLabels:
+      app: meilisearch
+  template:
+    metadata:
+      labels:
+        app: meilisearch
+    spec:
+      containers:
+        - name: meilisearch
+          image: "{{ .Values.meilisearch.image }}"
+          ports:
+            - containerPort: 7700
+          env:
+            - name: MEILI_ENV
+              value: "{{ .Values.meilisearch.env.MEILI_ENV }}"
+            - name: MEILI_MASTER_KEY
+              value: "{{ .Values.meilisearch.env.MEILI_MASTER_KEY }}"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: meilisearch
+spec:
+  selector:
+    app: meilisearch
+  type: {{ .Values.meilisearch.service.type }}
+  ports:
+    - protocol: TCP
+      port: {{ .Values.meilisearch.service.port }}
+      targetPort: 7700
