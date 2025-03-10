@@ -1,0 +1,48 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: meilisearch-extract-keys
+  labels:
+    app: meilisearch
+spec:
+  template:
+    spec:
+      containers:
+        - name: extract-keys
+          image: curlimages/curl:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Waiting for MeiliSearch to be ready..."
+              until curl -s -o /dev/null http://meilisearch:7700/health; do sleep 2; done
+
+              echo "Extracting API keys..."
+              API_KEYS=$(curl -s -H "Authorization: Bearer $MEILI_MASTER_KEY" http://meilisearch:7700/keys)
+
+              SEARCH_KEY=$(echo "$API_KEYS" | jq -r '.results[] | select(.description=="Use it to search from the frontend") | .key')
+              ADMIN_KEY=$(echo "$API_KEYS" | jq -r '.results[] | select(.description=="Use it for anything that is not a search operation") | .key')
+
+              if [ "$DEV_MODE" = "true" ]; then
+                echo "Running in development mode. Writing API keys to file at $MEILI_DEV_SECRET_PATH..."
+                echo "MEILI_SEARCH_KEY=$SEARCH_KEY" > "$MEILI_DEV_SECRET_PATH"
+                echo "MEILI_ADMIN_KEY=$ADMIN_KEY" >> "$MEILI_DEV_SECRET_PATH"
+                chmod 600 "$MEILI_DEV_SECRET_PATH"  # Restrict file access
+              else
+                echo "Running in Kubernetes mode. Storing API keys in a secret..."
+                kubectl create secret generic meilisearch-api-keys \
+                  --from-literal=MEILI_SEARCH_KEY=$SEARCH_KEY \
+                  --from-literal=MEILI_ADMIN_KEY=$ADMIN_KEY \
+                  --dry-run=client -o yaml | kubectl apply -f -
+              fi
+          env:
+            - name: MEILI_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.meilisearch.secretName }}
+                  key: MEILI_MASTER_KEY
+            - name: DEV_MODE
+              value: "{{ .Values.meilisearch.devMode }}"
+            - name: MEILI_DEV_SECRET_PATH  # New environment variable for the file path
+              value: "{{ .Values.meilisearch.devSecretPath }}"  # Set this in values.yaml
+      restartPolicy: Never

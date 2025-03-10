@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: meilisearch-api-keys
+type: Opaque
+data:
+  MEILI_SEARCH_KEY: ""  # Will be populated dynamically
+  MEILI_ADMIN_KEY: ""    # Will be populated dynamically

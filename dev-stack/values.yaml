@@ -7,9 +7,11 @@ meilisearch:
   service:
     type: LoadBalancer
     port: 7700
+  secretName: meilisearch-secret
+  extractKeys: true
+  devMode: true
   env:
     MEILI_ENV: "development"
-    MEILI_MASTER_KEY: "dev-key"
 
 ollama:
   enabled: true
