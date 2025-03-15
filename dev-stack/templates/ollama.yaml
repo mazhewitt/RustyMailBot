@@ -3,7 +3,7 @@ kind: Deployment
 metadata:
   name: ollama
 spec:
-  replicas: 1
+  replicas: {{ .Values.ollama.replicas }}
   selector:
     matchLabels:
       app: ollama
@@ -14,9 +14,10 @@ spec:
     spec:
       containers:
         - name: ollama
-          image: ollama/ollama:latest
+          image: {{ .Values.ollama.image }}
           ports:
             - containerPort: 11434
+              name: api
           command: ["/bin/sh", "-c"]
           args:
             - |
@@ -24,3 +25,17 @@ spec:
               ollama pull mistral
               echo "Starting Ollama..."
               ollama serve
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama
+spec:
+  selector:
+    app: ollama
+  type: {{ .Values.ollama.service.type }}
+  ports:
+    - name: http-api  # Add explicit name to the port
+      protocol: TCP
+      port: {{ .Values.ollama.service.port }}
+      targetPort: 11434

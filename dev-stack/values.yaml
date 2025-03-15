@@ -5,18 +5,19 @@ meilisearch:
   image: getmeili/meilisearch:latest
   replicas: 1
   service:
-    type: LoadBalancer
+    type: NodePort
     port: 7700
   secretName: meilisearch-secret
   extractKeys: true
   devMode: true
   env:
     MEILI_ENV: "development"
+    MEILI_MASTER_KEY: "myMasterKey123"  # Only for development
 
 ollama:
   enabled: true
   image: ollama/ollama:latest
   replicas: 1
   service:
-    type: LoadBalancer
-    port: 11435
+    type: NodePort
+    port: 11434  # Make sure this is the only port defined

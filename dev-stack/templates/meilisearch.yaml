@@ -21,7 +21,10 @@ spec:
             - name: MEILI_ENV
               value: "{{ .Values.meilisearch.env.MEILI_ENV }}"
             - name: MEILI_MASTER_KEY
-              value: "{{ .Values.meilisearch.env.MEILI_MASTER_KEY }}"
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.meilisearch.secretName }}
+                  key: MEILI_MASTER_KEY
 ---
 apiVersion: v1
 kind: Service
@@ -32,6 +35,7 @@ spec:
     app: meilisearch
   type: {{ .Values.meilisearch.service.type }}
   ports:
-    - protocol: TCP
+    - name: http
+      protocol: TCP
       port: {{ .Values.meilisearch.service.port }}
       targetPort: 7700

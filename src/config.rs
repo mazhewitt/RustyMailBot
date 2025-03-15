@@ -1,3 +1,9 @@
+
+use std::{env, fs};
+
+use std::path::Path;
+use dotenv::dotenv;
+
 pub fn init_logging() {
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
 }
@@ -28,8 +34,6 @@ const MEILISEARCH_URL: &'static str = "http://localhost:7700";
 pub fn meilisearch_url() -> String {
     String::from(MEILISEARCH_URL)
 }
-
-use std::{env, fs};
 
 const MEILI_SEARCH_KEY_PATH: &str = "/etc/secrets/meili/MEILI_SEARCH_KEY";
 const MEILI_ADMIN_KEY_PATH: &str = "/etc/secrets/meili/MEILI_ADMIN_KEY";
@@ -64,4 +68,35 @@ fn read_key_from_file(key: &str) -> String {
         }
     }
     panic!("Key {} not found in {}", key, MEILI_LOCAL_KEY_PATH);
+}
+
+
+
+pub struct Config {
+    pub meilisearch_host: String,
+    pub meilisearch_search_key: String,
+    pub meilisearch_admin_key: String,
+    pub ollama_host: String,
+}
+
+impl Config {
+    pub fn from_env() -> Result<Self, String> {
+        // Try to load from .env file if it exists
+        if Path::new(".env").exists() {
+            dotenv().ok();
+        }
+
+        let config = Config {
+            meilisearch_host: env::var("MEILI_HOST")
+                .unwrap_or_else(|_| "http://localhost:7700".to_string()),
+            meilisearch_search_key: env::var("MEILI_SEARCH_KEY")
+                .map_err(|_| "MEILI_SEARCH_KEY not found in environment".to_string())?,
+            meilisearch_admin_key: env::var("MEILI_ADMIN_KEY")
+                .map_err(|_| "MEILI_ADMIN_KEY not found in environment".to_string())?,
+            ollama_host: env::var("OLLAMA_HOST")
+                .unwrap_or_else(|_| "http://localhost:11434".to_string()),
+        };
+
+        Ok(config)
+    }
 }

@@ -2,47 +2,61 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: meilisearch-extract-keys
-  labels:
-    app: meilisearch
 spec:
   template:
     spec:
+      serviceAccountName: meilisearch-job-account
       containers:
         - name: extract-keys
-          image: curlimages/curl:latest
+          # Use an image that already has jq installed
+          image: alpine:latest
           command:
             - /bin/sh
             - -c
             - |
+              echo "Installing curl and jq..."
+              apk add --no-cache curl jq
+              
               echo "Waiting for MeiliSearch to be ready..."
-              until curl -s -o /dev/null http://meilisearch:7700/health; do sleep 2; done
-
+              until curl -s -o /dev/null http://meilisearch:7700/health; do 
+                sleep 2
+              done
+              
               echo "Extracting API keys..."
               API_KEYS=$(curl -s -H "Authorization: Bearer $MEILI_MASTER_KEY" http://meilisearch:7700/keys)
-
-              SEARCH_KEY=$(echo "$API_KEYS" | jq -r '.results[] | select(.description=="Use it to search from the frontend") | .key')
-              ADMIN_KEY=$(echo "$API_KEYS" | jq -r '.results[] | select(.description=="Use it for anything that is not a search operation") | .key')
-
-              if [ "$DEV_MODE" = "true" ]; then
-                echo "Running in development mode. Writing API keys to file at $MEILI_DEV_SECRET_PATH..."
-                echo "MEILI_SEARCH_KEY=$SEARCH_KEY" > "$MEILI_DEV_SECRET_PATH"
-                echo "MEILI_ADMIN_KEY=$ADMIN_KEY" >> "$MEILI_DEV_SECRET_PATH"
-                chmod 600 "$MEILI_DEV_SECRET_PATH"  # Restrict file access
-              else
-                echo "Running in Kubernetes mode. Storing API keys in a secret..."
-                kubectl create secret generic meilisearch-api-keys \
-                  --from-literal=MEILI_SEARCH_KEY=$SEARCH_KEY \
-                  --from-literal=MEILI_ADMIN_KEY=$ADMIN_KEY \
-                  --dry-run=client -o yaml | kubectl apply -f -
+              echo "Raw API keys data: $API_KEYS"
+              
+              SEARCH_KEY=$(echo "$API_KEYS" | jq -r '.results[] | select(.name=="Default Search API Key") | .key')
+              ADMIN_KEY=$(echo "$API_KEYS" | jq -r '.results[] | select(.name=="Default Admin API Key") | .key')
+              
+              echo "Extracted keys - SEARCH_KEY: $SEARCH_KEY, ADMIN_KEY: $ADMIN_KEY"
+              
+              if [ -z "$SEARCH_KEY" ] || [ -z "$ADMIN_KEY" ]; then
+                echo "Failed to extract API keys. Exiting."
+                exit 1
               fi
+
+              # Create Kubernetes secret with the keys
+              cat << EOF > /tmp/secret.yaml
+              apiVersion: v1
+              kind: Secret
+              metadata:
+                name: meilisearch-api-keys
+              type: Opaque
+              stringData:
+                MEILI_SEARCH_KEY: $SEARCH_KEY
+                MEILI_ADMIN_KEY: $ADMIN_KEY
+              EOF
+              
+              echo "Applying the secret..."
+              kubectl apply -f /tmp/secret.yaml
+              
+              echo "API keys successfully stored in Kubernetes secret"
           env:
             - name: MEILI_MASTER_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.meilisearch.secretName }}
+                  name: meilisearch-secret
                   key: MEILI_MASTER_KEY
-            - name: DEV_MODE
-              value: "{{ .Values.meilisearch.devMode }}"
-            - name: MEILI_DEV_SECRET_PATH  # New environment variable for the file path
-              value: "{{ .Values.meilisearch.devSecretPath }}"  # Set this in values.yaml
       restartPolicy: Never
+  backoffLimit: 3
