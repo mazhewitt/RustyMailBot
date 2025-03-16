@@ -32,7 +32,7 @@ kubectl wait --for=condition=ready pod -l app=ollama --timeout=180s || true
 
 # Wait for the API key extraction job to complete
 echo "Waiting for the MeiliSearch key extraction job to complete..."
-echo "(This may take up to 2 minutes...)"
+echo "(This may take up to 3 minutes...)"
 kubectl wait --for=condition=complete job/meilisearch-extract-keys --timeout=180s || true
 
 # Print job logs for debugging
@@ -66,12 +66,12 @@ fi
 echo "Creating .env file for your Rust application..."
 cat > "${LOCAL_ENV_FILE}" <<EOF
 # MeiliSearch Configuration
-MEILI_HOST=http://localhost:${MEILI_PORT}
+MEILI_URL=http://localhost:${MEILI_PORT}
 MEILI_SEARCH_KEY=${MEILI_SEARCH_KEY}
 MEILI_ADMIN_KEY=${MEILI_ADMIN_KEY}
 
 # Ollama Configuration
-OLLAMA_HOST=http://localhost:${OLLAMA_PORT}
+OLLAMA_URL=http://localhost:${OLLAMA_PORT}
 EOF
 
 echo "Development environment is ready!"
