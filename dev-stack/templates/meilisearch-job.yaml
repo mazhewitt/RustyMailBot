@@ -15,7 +15,7 @@ spec:
             - -c
             - |
               echo "Installing curl and jq..."
-              apk add --no-cache curl jq
+              apk add --no-cache curl jq kubectl
               
               echo "Waiting for MeiliSearch to be ready..."
               until curl -s -o /dev/null http://meilisearch:7700/health; do 

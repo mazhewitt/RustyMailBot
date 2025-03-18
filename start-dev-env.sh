@@ -1,115 +1,175 @@
 #!/bin/bash
 set -e
 
-# Check for required tools
-if ! command -v helm &>/dev/null || ! command -v kubectl &>/dev/null; then
-    echo "Error: helm and kubectl are required"
+echo "Starting development environment..."
+
+# Function to check if a command exists
+command_exists() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+# Function to check if a service is running on a specific port
+port_in_use() {
+  lsof -i :"$1" >/dev/null 2>&1
+}
+
+# Colors for output
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m' # No Color
+
+# -----------------------------
+# Ollama Setup (Local Installation)
+# -----------------------------
+OLLAMA_PORT=11434
+OLLAMA_MODEL="llama3.2"
+
+echo "Checking Ollama installation..."
+
+# Check if Ollama is installed
+if ! command_exists ollama; then
+  echo -e "${YELLOW}Ollama is not installed. Installing it using Homebrew...${NC}"
+
+  # Check if Homebrew is installed
+  if ! command_exists brew; then
+    echo -e "${RED}Error: Homebrew is not installed. Please install Homebrew first.${NC}"
+    echo "Visit https://brew.sh for installation instructions."
+    exit 1
+  fi
+
+  # Install Ollama
+  brew install ollama
+
+  if [ $? -ne 0 ]; then
+    echo -e "${RED}Failed to install Ollama.${NC}"
+    exit 1
+  fi
+
+  echo -e "${GREEN}Ollama installed successfully.${NC}"
+fi
+
+# Check if Ollama is running
+if ! port_in_use $OLLAMA_PORT; then
+  echo "Starting Ollama service..."
+  ollama serve &
+
+  # Wait for Ollama to start
+  echo "Waiting for Ollama to start..."
+  attempts=0
+  max_attempts=20
+
+  while ! curl -s "http://localhost:$OLLAMA_PORT/api/tags" > /dev/null && [ $attempts -lt $max_attempts ]; do
+    sleep 1
+    attempts=$((attempts + 1))
+    echo -n "."
+  done
+
+  if [ $attempts -ge $max_attempts ]; then
+    echo -e "\n${RED}Ollama failed to start within the expected time.${NC}"
+    exit 1
+  fi
+
+  echo -e "\n${GREEN}Ollama started successfully.${NC}"
+else
+  echo -e "${GREEN}Ollama is already running.${NC}"
+fi
+
+# Pull the required model
+echo "Checking if model $OLLAMA_MODEL is already downloaded..."
+if ! curl -s "http://localhost:$OLLAMA_PORT/api/tags" | grep -q "\"$OLLAMA_MODEL\""; then
+  echo "Pulling $OLLAMA_MODEL model (this may take a while)..."
+  ollama pull $OLLAMA_MODEL
+
+  if [ $? -ne 0 ]; then
+    echo -e "${RED}Failed to pull $OLLAMA_MODEL model.${NC}"
+    exit 1
+  fi
+
+  echo -e "${GREEN}Model $OLLAMA_MODEL pulled successfully.${NC}"
+else
+  echo -e "${GREEN}Model $OLLAMA_MODEL is already available.${NC}"
+fi
+
+# -----------------------------
+# Kubernetes Deployment
+# -----------------------------
+echo "Cleaning up previous deployment..."
+helm uninstall dev-stack 2>/dev/null || true
+
+echo "Deploying development stack (without Ollama)..."
+if ! helm install dev-stack ./dev-stack; then
+    echo -e "${RED}Failed to deploy development stack${NC}"
     exit 1
 fi
 
-# Define paths
-LOCAL_ENV_FILE="$(pwd)/.env"
-
-echo "Starting development environment..."
-
-# Clean up existing resources
-echo "Cleaning up previous deployment..."
-helm uninstall dev-stack 2>/dev/null || true
-kubectl delete job meilisearch-extract-keys 2>/dev/null || true
-kubectl delete secret meilisearch-api-keys meilisearch-secret 2>/dev/null || true
-sleep 5
-
-# Deploy the dev-stack chart
-echo "Deploying development stack..."
-helm install dev-stack ./dev-stack
-
-# Wait for the MeiliSearch pod to be ready
+# Wait for MeiliSearch pod to be ready with improved error handling
 echo "Waiting for MeiliSearch pod to be ready..."
-kubectl wait --for=condition=ready pod -l app=meilisearch --timeout=120s || true
-
-echo "Waiting for Ollama pod to be ready..."
-kubectl wait --for=condition=ready pod -l app=ollama --timeout=180s || true
-
-# Wait for the API key extraction job to complete
-echo "Waiting for the MeiliSearch key extraction job to complete..."
-echo "(This may take up to 3 minutes...)"
-kubectl wait --for=condition=complete job/meilisearch-extract-keys --timeout=180s || true
-
-# Print job logs for debugging
-echo "Job logs:"
-kubectl logs job/meilisearch-extract-keys
-
-# Get service ports (for Docker Desktop Kubernetes which uses NodePorts)
-MEILI_PORT=$(kubectl get svc meilisearch -o jsonpath='{.spec.ports[0].nodePort}')
-OLLAMA_PORT=$(kubectl get svc ollama -o jsonpath='{.spec.ports[0].nodePort}')
-
-# Get the MeiliSearch API keys from the Kubernetes secret
-echo "Extracting MeiliSearch API keys from Kubernetes secret..."
-MEILI_SEARCH_KEY=$(kubectl get secret meilisearch-api-keys -o jsonpath='{.data.MEILI_SEARCH_KEY}' 2>/dev/null | base64 --decode)
-MEILI_ADMIN_KEY=$(kubectl get secret meilisearch-api-keys -o jsonpath='{.data.MEILI_ADMIN_KEY}' 2>/dev/null | base64 --decode)
-
-# Check if the keys are empty
-MEILI_SEARCH_KEY="${MEILI_SEARCH_KEY:-}"
-MEILI_ADMIN_KEY="${MEILI_ADMIN_KEY:-}"
-
-# Check if keys were found
-if [ -z "$MEILI_SEARCH_KEY" ] || [ -z "$MEILI_ADMIN_KEY" ]; then
-    echo "Warning: Failed to get MeiliSearch API keys from Kubernetes secret."
-    echo "Attempting to extract keys directly from MeiliSearch..."
-
-    # Get the master key
-    MASTER_KEY=$(kubectl get secret meilisearch-secret -o jsonpath='{.data.MEILI_MASTER_KEY}' | base64 --decode)
-
-    # Check if MEILI_PORT is empty
-    if [ -z "$MEILI_PORT" ]; then
-        echo "Error: MEILI_PORT is not set. Please ensure the MeiliSearch service is properly exposed."
-        exit 1
-    fi
-
-    # Directly query MeiliSearch API
-    API_KEYS=$(curl -s -H "Authorization: Bearer $MASTER_KEY" "http://localhost:$MEILI_PORT/keys")
-
-    # Check if the API_KEYS variable is empty
-    if [ -z "$API_KEYS" ]; then
-        echo "Error: Failed to retrieve API keys from MeiliSearch. Check if MeiliSearch is running and accessible."
-        exit 1
-    fi
-
-    # Extract the search key
-    SEARCH_KEY=$(echo "$API_KEYS" | jq -r '.results[] | select(.name=="Default Search API Key") | .key')
-    # Extract the admin key
-    ADMIN_KEY=$(echo "$API_KEYS" | jq -r '.results[] | select(.name=="Default Admin API Key") | .key')
-
-    # Check if the keys are empty
-    if [ -z "$SEARCH_KEY" ] || [ -z "$ADMIN_KEY" ]; then
-        echo "Warning: Could not retrieve both search and admin keys from MeiliSearch API."
-        if [ -z "$SEARCH_KEY" ]; then
-            echo "Search key was not found."
-        fi
-        if [ -z "$ADMIN_KEY" ]; then
-            echo "Admin key was not found."
-        fi
-    fi
-
-    # Assign the keys
-    MEILI_SEARCH_KEY="$SEARCH_KEY"
-    MEILI_ADMIN_KEY="$ADMIN_KEY"
+# First wait for pod to exist
+sleep 5  # Give time for pod creation
+if ! kubectl wait --for=condition=ready pod -l app=meilisearch --timeout=180s; then
+    echo -e "${RED}MeiliSearch pod failed to become ready within timeout${NC}"
+    echo "Checking pod status..."
+    kubectl get pods -l app=meilisearch
+    kubectl describe pods -l app=meilisearch
+    exit 1
 fi
 
-# Create a .env file with all the configuration for the local Rust application
-echo "Creating .env file for your Rust application..."
-cat > "${LOCAL_ENV_FILE}" <<EOF
-# MeiliSearch Configuration
-MEILI_URL=http://localhost:${MEILI_PORT}
-MEILI_SEARCH_KEY=${MEILI_SEARCH_KEY}
-MEILI_ADMIN_KEY=${MEILI_ADMIN_KEY}
+# Ensure pod is fully ready before proceeding
+MEILISEARCH_POD=$(kubectl get pods -l app=meilisearch -o jsonpath='{.items[0].metadata.name}')
+if ! kubectl get pod $MEILISEARCH_POD -o jsonpath='{.status.containerStatuses[0].ready}' | grep -q "true"; then
+    echo -e "${RED}MeiliSearch container is not ready${NC}"
+    exit 1
+fi
 
-# Ollama Configuration
-OLLAMA_URL=http://localhost:${OLLAMA_PORT}
+echo -e "${GREEN}MeiliSearch pod is ready${NC}"
+
+# Wait for the key extraction job with improved error handling
+echo "Waiting for the MeiliSearch key extraction job to complete..."
+echo "(This may take up to 3 minutes...)"
+if ! kubectl wait --for=condition=complete job/meilisearch-extract-keys --timeout=180s; then
+    echo -e "${RED}Key extraction job failed to complete within timeout${NC}"
+    echo "Checking job status..."
+    kubectl get jobs meilisearch-extract-keys
+    kubectl describe job meilisearch-extract-keys
+    exit 1
+fi
+
+# Show job logs only if the job exists
+if kubectl get job meilisearch-extract-keys &>/dev/null; then
+    echo "Job logs:"
+    kubectl logs job/meilisearch-extract-keys
+else
+    echo -e "${YELLOW}Warning: Key extraction job not found${NC}"
+fi
+
+# Create or update environment variables
+echo "Creating .env file for your Rust application..."
+MEILISEARCH_HOST="http://localhost:$(kubectl get svc meilisearch -o jsonpath='{.spec.ports[0].nodePort}')"
+OLLAMA_HOST="http://localhost:$OLLAMA_PORT"
+
+# Extract MeiliSearch keys - UPDATED TO USE CORRECT SECRET AND FIELD NAMES
+MS_ADMIN_KEY=$(kubectl get secret meilisearch-api-keys -o jsonpath='{.data.MEILI_ADMIN_KEY}' 2>/dev/null | base64 --decode)
+MS_SEARCH_KEY=$(kubectl get secret meilisearch-api-keys -o jsonpath='{.data.MEILI_SEARCH_KEY}' 2>/dev/null | base64 --decode)
+
+if [ -z "$MS_ADMIN_KEY" ] || [ -z "$MS_SEARCH_KEY" ]; then
+  echo "Warning: Failed to get MeiliSearch API keys from Kubernetes secret."
+  echo "Attempting to extract keys directly from MeiliSearch..."
+  # You might add additional logic here to get the keys directly
+fi
+
+# Create .env file
+cat > .env << EOF
+MEILISEARCH_URL=$MEILISEARCH_HOST
+MEILI_ADMIN_KEY=$MS_ADMIN_KEY
+MEILI_SEARCH_KEY=$MS_SEARCH_KEY
+OLLAMA_URL=$OLLAMA_HOST
+OLLAMA_MODEL=$OLLAMA_MODEL
+MEILI_URL=$MEILISEARCH_HOST
 EOF
 
-echo "Development environment is ready!"
+echo -e "${GREEN}Development environment is ready!${NC}"
 echo "Your Rust application can connect to:"
-echo "- MeiliSearch at http://localhost:${MEILI_PORT}"
-echo "- Ollama at http://localhost:${OLLAMA_PORT}"
-echo "API keys and connection information are stored in ${LOCAL_ENV_FILE}"
+echo "- MeiliSearch at $MEILISEARCH_HOST"
+echo "- Ollama at $OLLAMA_HOST"
+echo "API keys and connection information are stored in $PWD/.env"
