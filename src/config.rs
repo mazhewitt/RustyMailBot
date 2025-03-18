@@ -1,4 +1,4 @@
-use std::{env, fs};
+use std::{env};
 use std::path::Path;
 use dotenv::dotenv;
 use std::sync::Once;
@@ -32,28 +32,23 @@ pub fn ollama_port() -> u16 {
 }
 
 pub fn ollama_host() -> String {
-    // Get the Ollama URL from the environment, or use a default
-    env::var("OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434".to_string())
+    Config::from_env().unwrap().ollama_url
 }
 
 pub fn meilisearch_master_key() -> String {
-    // Get MeiliSearch master key from environment
-    env::var("MEILI_MASTER_KEY").unwrap_or_default()
+   Config::from_env().unwrap().meilisearch_admin_key
 }
 
 pub fn meilisearch_url() -> String {
-    // Get MeiliSearch URL from environment
-    env::var("MEILI_URL").unwrap_or_else(|_| "http://localhost:7700".to_string())
+   Config::from_env().unwrap().meilisearch_url
 }
 
 pub fn meilisearch_admin_key() -> String {
-    // Get MeiliSearch admin key from environment
-    env::var("MEILI_ADMIN_KEY").unwrap_or_default()
+   Config::from_env().unwrap().meilisearch_admin_key
 }
 
 pub fn meilisearch_search_key() -> String {
-    // Get MeiliSearch search key from environment
-    env::var("MEILI_SEARCH_KEY").unwrap_or_default()
+    Config::from_env().unwrap().meilisearch_search_key
 }
 
 pub struct Config {
@@ -85,12 +80,10 @@ impl Config {
         }
 
         let config = Config {
-            meilisearch_url: env::var("MEILI_URL")
-                .unwrap_or_else(|_| "http://localhost:7700".to_string()),
+            meilisearch_url: env::var("MEILI_URL").unwrap(),
             meilisearch_search_key: search_key,
             meilisearch_admin_key: admin_key,
-            ollama_url: env::var("OLLAMA_URL")
-                .unwrap_or_else(|_| "http://localhost:11434".to_string()),
+            ollama_url: env::var("OLLAMA_URL").unwrap(),
         };
 
         Ok(config)
@@ -149,8 +142,6 @@ mod tests {
 
         // Just verify that we can access the variables and they're not empty
         let meili_url = meilisearch_url();
-        let meili_search_key = meilisearch_search_key();
-
         assert!(is_valid_url(&meili_url), "MEILI_URL should be a valid URL");
         println!("MeiliSearch URL: {}", meili_url);
     }
