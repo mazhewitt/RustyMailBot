@@ -21,3 +21,13 @@ ollama:
   service:
     type: NodePort
     port: 11434  # Make sure this is the only port defined
+  modelInit:
+    enabled: true
+    modelName: llama3.2
+    resources:
+      requests:
+        memory: "2Gi"
+        cpu: "500m"
+      limits:
+        memory: "8Gi"
+        cpu: "4"
