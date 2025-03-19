@@ -7,6 +7,7 @@ use tokio::time::timeout;
 use std::time::Duration as StdDuration;
 use anyhow::{anyhow, Context, Result};
 use lazy_static::lazy_static;
+use crate::config;
 
 // Cache to avoid repeated identical LLM calls
 lazy_static! {
@@ -249,8 +250,8 @@ async fn enhance_criteria_with_llm(
     _regex_criteria: &QueryCriteria,
     config: &QuerySystemConfig
 ) -> Result<QueryCriteria> {
-    // Create an Ollama client
-    let client = reqwest::Client::new();
+    // Use the convenient function to create an Ollama instance
+    let ollama = config::create_ollama();
 
     // Construct our prompt
     let today = Local::now();
@@ -280,39 +281,20 @@ async fn enhance_criteria_with_llm(
         query
     );
     log::debug!("LLM prompt: {}", prompt);
-    // Call Ollama API
-    let ollama_request = serde_json::json!({
-        "model": config.llm_model,
-        "prompt": prompt,
-        "stream": false,
-        "options": {
-            "temperature": 0.1,  // Low temperature for more predictable output
-            "top_p": 0.9,
-            "stop": ["}"]  // Stop after closing the JSON
-        }
-    });
 
-    log::debug!("Sending request to Ollama with model: {}", config.llm_model);
+    // Use ollama_rs to generate the response
+    let request = ollama_rs::generation::completion::request::GenerationRequest::new(
+        config.llm_model.clone(),
+        prompt
+    );
 
-    let response = client
-        .post("http://localhost:11434/api/generate")
-        .json(&ollama_request)
-        .send()
-        .await
-        .context("Failed to connect to Ollama service")?;
+    // Send the request and get the response
+    let response = match ollama.generate(request).await {
+        Ok(response) => response,
+        Err(e) => return Err(anyhow!("Ollama API error: {}", e))
+    };
 
-    if !response.status().is_success() {
-        return Err(anyhow!("Ollama returned error: {}", response.status()));
-    }
-
-    let response_body = response
-        .json::<serde_json::Value>()
-        .await
-        .context("Failed to parse Ollama response")?;
-
-    let llm_response = response_body["response"]
-        .as_str()
-        .ok_or_else(|| anyhow!("Invalid Ollama response format"))?;
+    let llm_response = response.response;
 
     // Try to parse the JSON response, ensuring we complete the JSON if it was cut off
     let mut json_text = llm_response.trim().to_string();

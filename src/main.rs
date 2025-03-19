@@ -12,7 +12,7 @@ use actix_web::cookie::{Key, SameSite};
 use log::info;
 use routes::app_state::AppState;
 use config::init_logging;
-use services::{email_service, embedding_service};
+use services::{email_service};
 
 
 #[actix_web::main]
@@ -23,7 +23,7 @@ async fn main() -> std::io::Result<()> {
     let secret_key = Key::from("0123456789012345678901234567890123456789012345678901234567890123".as_bytes());
 
     // Create an instance of Ollama and GlobalSessionManager.
-    let ollama = embedding_service::create_ollama();
+    let ollama = config::create_ollama();
     let session_manager = email_service::create_session_manager();
 
     let app_state = AppState {   ollama, session_manager };

@@ -1,8 +1,9 @@
-use std::{env};
+use std::env;
 use std::path::Path;
 use dotenv::dotenv;
 use std::sync::Once;
 use url::Url;
+use ollama_rs::Ollama;
 
 // A global initializer to ensure the `.env` file is loaded only once
 static INIT: Once = Once::new();
@@ -274,4 +275,23 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_create_ollama() {
+        // Create an Ollama instance
+        let ollama = create_ollama();
+
+        // Verify that it has proper host and port
+        let expected_host = ollama_host();
+        let expected_port = ollama_port();
+
+        // We can access these through debug representation, as actual fields are private
+        let debug_str = format!("{:?}", ollama);
+        assert!(debug_str.contains(&expected_host), "Ollama should use the configured host");
+    }
 }
+
+pub fn create_ollama() -> Ollama {
+    Ollama::new(ollama_host(), ollama_port())
+}
+

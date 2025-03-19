@@ -22,7 +22,7 @@ pub async fn handle_chat_request(
         let user_input = req_body["message"].as_str().unwrap_or_default().to_string();
         info!("Processing message for session {}: {}", session_id, user_input);
 
-        match chat_service::process_chat(&user_input, &mut user_session, data.ollama.clone()).await {
+        match chat_service::process_chat(&user_input, &mut user_session).await {
             Ok(response_content) => {
                 // Update the session after processing
                 data.session_manager.insert(session_id.clone(), user_session);

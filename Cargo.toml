@@ -7,8 +7,6 @@ edition = "2021"
 actix-web = "4"
 actix-files = "0.6"
 env_logger = "0.10"
-async-stream = "0.3"
-bytes = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -20,7 +18,6 @@ ollama-rs = "0.2.4"
 actix-session = { version = "0.10.1", features = ["cookie-session"] }
 uuid = { version = "1.14.0", features = ["v4"] }
 anyhow = "1.0.96"
-futures = "0.3.31"
 chrono = "0.4.39"
 regex = "1.11.1"
 lazy_static = "1.5.0"
@@ -28,3 +25,9 @@ thiserror = "1.0.69"
 meilisearch-sdk = "0.28.0"
 dotenv = "0.15.0"
 url = "2.5.4"
+
+
+[dev-dependencies]
+mockall = "0.11"
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
