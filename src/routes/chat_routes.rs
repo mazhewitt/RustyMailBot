@@ -12,5 +12,5 @@ async fn stream_greeting(
     session: Session,
     req_body: web::Json<Value>
 ) -> impl Responder {
-    crate::handlers::chat_handler::stream_greeting(data, session, req_body).await
+    crate::handlers::chat_handler::handle_chat_request(data, session, req_body).await
 }

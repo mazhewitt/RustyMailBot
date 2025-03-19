@@ -131,7 +131,7 @@ impl EmailDB {
         Ok(())
     }
 
-    // rust
+
     pub async fn search_emails_by_criteria(&self, criteria: QueryCriteria) -> Result<Vec<Email>, EmailDBError> {
         let mut search_query = self.index.search();
 

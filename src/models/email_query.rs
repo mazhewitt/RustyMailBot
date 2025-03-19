@@ -279,7 +279,7 @@ async fn enhance_criteria_with_llm(
         today.format("%Y-%m-%d"),
         query
     );
-
+    log::debug!("LLM prompt: {}", prompt);
     // Call Ollama API
     let ollama_request = serde_json::json!({
         "model": config.llm_model,

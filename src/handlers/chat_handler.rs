@@ -5,7 +5,7 @@ use log::{info, warn, error};
 use crate::routes::app_state::AppState;
 use crate::services::chat_service;
 
-pub async fn stream_greeting(
+pub async fn handle_chat_request(
     data: web::Data<AppState>,
     session: Session,
     req_body: web::Json<Value>
@@ -17,8 +17,6 @@ pub async fn stream_greeting(
         warn!("No valid session_id found in cookie; falling back to request body");
         req_body["session_id"].as_str().unwrap_or_default().to_string()
     };
-
-    info!("Stream Greeting on session: {}", session_id);
 
     if let Some(mut user_session) = data.session_manager.get(&session_id) {
         let user_input = req_body["message"].as_str().unwrap_or_default().to_string();
