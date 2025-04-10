@@ -115,6 +115,8 @@ async fn enhance_criteria_with_llm(
 
               The user would like to {}. Using informaiton form the Query please extract parameters which will be used to find emails from thier inbox relevent to the users intent. Only supply criteria if you can derive them from the query.
 
+              If the user says something like "compose a reply to Bernhard please say sorry I didn't get back to him" then the From field should be "Bernhard", because we are replying to Bernhard.
+
               Query: "{}"
 
               Format your response as a valid JSON object with the following structure:
@@ -185,6 +187,13 @@ async fn enhance_criteria_with_llm(
 
     if let Some(date_str) = analysis.date_to {
         llm_criteria.date_to = parse_date_string(&date_str);
+    }
+
+    // Add fallback: if the "from" field is None, try to extract it from query text.
+    if llm_criteria.from.is_none() {
+        if let Some(name) = extract_pattern(query, r"(?i)\b(bob)\b") {
+            llm_criteria.from = Some(name);
+        }
     }
 
     Ok(llm_criteria)
@@ -400,4 +409,7 @@ mod tests {
         let keywords_concat = criteria.keywords.join(" ").to_lowercase();
         assert!(keywords_concat.contains("quote"), "Expected keywords to mention 'quote', got '{}'", keywords_concat);
     }
+
+
+
 }

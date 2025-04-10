@@ -123,15 +123,31 @@ impl EmailDB {
     }
 
 
+    // language: rust
     pub async fn search_emails_by_criteria(&self, criteria: QueryCriteria) -> Result<Vec<Email>, EmailDBError> {
         let mut search_query = self.index.search();
 
         // Build the query string so it lives long enough.
-        let query: Option<String> = if !criteria.keywords.is_empty() {
+        let mut query: Option<String> = if !criteria.keywords.is_empty() {
             Some(criteria.keywords.join(" "))
         } else {
             None
         };
+
+        // Process the from field: if it is not an exact email address, use it for substring matching.
+        if let Some(ref from) = criteria.from {
+            if from.contains("@") {
+                // Exact match via filter.
+            } else {
+                match query {
+                    Some(ref mut q) => {
+                        q.push_str(" ");
+                        q.push_str(from);
+                    },
+                    None => query = Some(from.clone()),
+                }
+            }
+        }
 
         if let Some(ref q) = query {
             search_query.with_query(q);
@@ -141,8 +157,11 @@ impl EmailDB {
         let filter: Option<String> = {
             let mut filters = Vec::new();
 
+            // Only add exact match filter for \"from\" if it is an email address.
             if let Some(ref from) = criteria.from {
-                filters.push(format!("from = \"{}\"", from));
+                if from.contains("@") {
+                    filters.push(format!("from = \"{}\"", from));
+                }
             }
 
             if let Some(ref to) = criteria.to {
@@ -161,11 +180,7 @@ impl EmailDB {
                 filters.push(format!("date <= \"{}\"", date_to));
             }
 
-            if !criteria.raw_query.is_empty() && criteria.llm_confidence >= 0.8 {
-                filters.push(criteria.raw_query);
-            }
-
-            if !filters.is_empty() {
+           if !filters.is_empty() {
                 Some(filters.join(" AND "))
             } else {
                 None
@@ -332,7 +347,7 @@ mod tests {
             subject: Some("Advanced Search Test".to_string()),
             date_from: None,
             date_to: None,
-            raw_query: "".to_string(),
+            raw_query: "Perform an Advanced Search".to_string(),
             llm_confidence: 1.0,
         };
 
@@ -365,4 +380,82 @@ mod tests {
             })?;
         Ok(db)
     }
+    // language: rust
+    #[tokio::test]
+    async fn test_search_from_field_matching() -> Result<(), Box<dyn std::error::Error>> {
+        // Initialize logger for tests.
+        let _ = env_logger::builder().is_test(true).try_init();
+
+        // Create an EmailDB instance for testing.
+        let db = create_test_db().await?;
+
+        // Create three emails:
+        // 1. Sender with lowercase bob in the email address.
+        let email1 = crate::models::email::Email {
+            message_id: Some("test-from-1".to_string()),
+            from: Some("bob@example.com".to_string()),
+            to: Some("user@example.com".to_string()),
+            date: Some("2025-03-04T12:00:00Z".to_string()),
+            subject: Some("Email from Bob".to_string()),
+            body: Some("Test email content.".to_string()),
+        };
+
+        // 2. Sender signed as Bob but using a different email address.
+        let email2 = crate::models::email::Email {
+            message_id: Some("test-from-2".to_string()),
+            from: Some("Bob <robert@foo.com>".to_string()),
+            to: Some("user@example.com".to_string()),
+            date: Some("2025-03-04T12:05:00Z".to_string()),
+            subject: Some("Another email from Bob".to_string()),
+            body: Some("Another test email.".to_string()),
+        };
+
+        // 3. A control email that does not include Bob.
+        let email3 = crate::models::email::Email {
+            message_id: Some("test-from-3".to_string()),
+            from: Some("alice@example.com".to_string()),
+            to: Some("user@example.com".to_string()),
+            date: Some("2025-03-04T12:10:00Z".to_string()),
+            subject: Some("Email from Alice".to_string()),
+            body: Some("Control email content.".to_string()),
+        };
+
+        // Store the emails.
+        db.store_emails(&[email1, email2, email3]).await?;
+
+        // Allow time for indexing.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        // Build search criteria with from = "Bob".
+        let criteria = crate::models::email_query::QueryCriteria {
+            keywords: vec![],
+            from: Some("Bob".to_string()),
+            to: None,
+            subject: None,
+            date_from: None,
+            date_to: None,
+            raw_query: "".to_string(),
+            llm_confidence: 0.0,
+        };
+
+        // Execute advanced search.
+        let results = db.search_emails_by_criteria(criteria).await?;
+
+        // Assert that results contain both emails with Bob and not the control email.
+        let found_ids: Vec<_> = results.iter()
+            .filter_map(|email| email.message_id.clone())
+            .collect();
+        assert!(found_ids.contains(&"test-from-1".to_string()), "Did not find email from bob@example.com");
+        assert!(found_ids.contains(&"test-from-2".to_string()), "Did not find email signed as Bob");
+        assert!(!found_ids.contains(&"test-from-3".to_string()), "Control email should not be returned");
+
+        // Clean up test emails.
+        db.delete_email("test-from-1").await?;
+        db.delete_email("test-from-2").await?;
+        db.delete_email("test-from-3").await?;
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        Ok(())
+    }
+
 }
