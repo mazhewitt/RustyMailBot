@@ -2,13 +2,12 @@ use meilisearch_sdk::{client::Client, indexes::Index};
 use crate::config;
 use crate::models::email::Email;
 use crate::models::email_query::QueryCriteria;
-use log::{debug, error, info, warn};
+use log::{error};
 
 /// An async wrapper for the MeiliSearch Email DB.
 #[derive(Clone)]
 pub struct EmailDB {
     admin_client: Client,
-    search_client: Client,
     index: Index,
 }
 
@@ -40,22 +39,16 @@ impl EmailDB {
     pub async fn new(
         url: &str,
         admin_key: Option<&str>,
-        search_key: Option<&str>,
         index_name: &str,
     ) -> Result<Self, EmailDBError> {
         // Validate keys for write and read operations.
         let admin_key = admin_key
             .filter(|k| !k.is_empty())
             .ok_or_else(|| EmailDBError::AuthError("Admin key is required".to_string()))?;
-        let search_key = search_key
-            .filter(|k| !k.is_empty())
-            .ok_or_else(|| EmailDBError::AuthError("Search key is required".to_string()))?;
 
         // Create admin and search clients.
         let admin_client = Client::new(url, Some(admin_key))
             .map_err(|e| EmailDBError::ConnectionError(format!("Failed to create admin client: {}", e)))?;
-        let search_client = Client::new(url, Some(search_key))
-            .map_err(|e| EmailDBError::ConnectionError(format!("Failed to create search client: {}", e)))?;
 
         // Verify connectivity.
         admin_client.health().await
@@ -85,7 +78,6 @@ impl EmailDB {
 
         Ok(EmailDB {
             admin_client,
-            search_client,
             index,
         })
     }
@@ -94,8 +86,7 @@ impl EmailDB {
         Self::new(
             config::meilisearch_url().as_str(),
             Some(config::meilisearch_admin_key().as_str()),
-            Some(config::meilisearch_search_key().as_str()),
-            "emails"
+           "emails"
         ).await
     }
 
@@ -202,7 +193,7 @@ mod tests {
     use crate::models::email_query::QueryCriteria;
     use tokio;
     use std::time::Duration;
-    use log::{debug, error, info, warn};
+    use log::{debug, error};
 
     /// Helper function to generate a test email.
     fn test_email(message_id: &str, subject: &str) -> Email {
@@ -364,11 +355,10 @@ mod tests {
 
         let url = config::meilisearch_url();
         let admin_key = config::meilisearch_admin_key();
-        let search_key = config::meilisearch_search_key();
 
         debug!("MeiliSearch URL: {}", url);
 
-        let db = EmailDB::new(&url, Some(&admin_key), Some(&search_key), "emails_test").await
+        let db = EmailDB::new(&url, Some(&admin_key),  "emails_test").await
             .map_err(|e| {
                 error!("Failed to create EmailDB: {:?}", e);
                 e

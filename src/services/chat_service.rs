@@ -2,7 +2,6 @@ use crate::models::user_session::UserSession;
 use crate::config::SYSTEM_PROMPT;
 use crate::models::email_query;
 use log::info;
-use ollama_rs::Ollama;
 use ollama_rs::generation::chat::{ChatMessage, request::ChatMessageRequest};
 use serde::{Deserialize, Serialize};
 use crate::config;
@@ -95,24 +94,64 @@ Now, classify the following user input:
 }
 
 /// Process the chat based on the user's intent
+/// Process the chat based on the user's intent
 pub async fn process_chat(
     user_input: &str,
     user_session: &mut UserSession
 ) -> Result<String, Box<dyn std::error::Error>> {
-    // Classify the user's intent
+    // Classify the user's intent first
     let intent_classification = classify_intent(user_input).await?;
     info!("Intent classification: {:?}", intent_classification);
     let intent = intent_classification.get_intent();
 
-    // Refine the query using the more complex refine_query function
-    let refined_query = email_query::refine_query(user_input, None).await?;
-    info!("Refined query: {:?}", refined_query);
+    // Handle email retrieval differently based on intent
+    let context_emails = match intent {
+            Intent::Reply => {
+                // For replies, we need to find a specific email
+                let refined_query = email_query::refine_query(user_input, Intent::Reply).await?;
+                info!("Refined query for reply: {:?}", refined_query);
+                let emails = user_session.mailbox.search_emails_by_criteria(refined_query).await?;
 
-    // Retrieve context from the mailbox
-    let context_emails = user_session.mailbox.search_emails_by_criteria(refined_query).await?;
+                // If we couldn't find a specific email to reply to, ask for clarification
+                if emails.is_empty() {
+                    return Ok("I couldn't find the specific email you want to reply to. Could you provide more details about the email, like who sent it or what it was about?".to_string());
+                }
+                emails
+            },
+            Intent::Compose => {
+                // For compose, we might want related emails as context but don't require them
+                let refined_query = email_query::refine_query(user_input, Intent::Compose).await?;
+                info!("Refined query for compose: {:?}", refined_query);
+                user_session.mailbox.search_emails_by_criteria(refined_query).await?
+                // Empty results are fine for compose
+            },
+            Intent::Explain => {
+                // For explain, we need to find the specific email(s) to explain
+                let refined_query = email_query::refine_query(user_input, Intent::Explain).await?;
+                info!("Refined query for explain: {:?}", refined_query);
+                let emails = user_session.mailbox.search_emails_by_criteria(refined_query).await?;
 
-    // Handle the intent
-    handle_intent(&intent, user_input, user_session, &*format_emails(&context_emails)).await
+                // If we couldn't find a specific email to explain, ask for clarification
+                if emails.is_empty() {
+                    return Ok("I couldn't find the specific email you want me to explain. Could you provide more details about the email, like who sent it or what it was about?".to_string());
+                }
+                emails
+            },
+            Intent::General => {
+                // For general queries, do a broad search
+                let refined_query = email_query::refine_query(user_input, Intent::General).await?;
+                info!("Refined query for general query: {:?}", refined_query);
+                user_session.mailbox.search_emails_by_criteria(refined_query).await?
+                // Empty results are acceptable for general queries
+            }
+    };
+
+
+    // Format emails for context
+    let context_str = format_emails(&context_emails);
+
+    // Handle the intent with the appropriate context
+    handle_intent(&intent, user_input, user_session, &context_str).await
 }
 
 /// Handle the different types of intents
@@ -144,27 +183,14 @@ async fn handle_intent(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::models::email::Email;
     use crate::models::user_session::UserSession;
     use crate::models::email_db::EmailDB;
     use crate::services::chat_service::{classify_intent, process_chat};
-    // Remove unused imports
-    // use std::sync::Arc;
-    // use Intent;
-
-    // Create an empty user session for tests
-    async fn create_empty_session() -> Result<UserSession, Box<dyn std::error::Error>> {
-        let mail_db = EmailDB::default().await?;
-        Ok(UserSession {
-            history: Vec::new(),
-            mailbox: mail_db,
-        })
-    }
 
     // Utility function to create a test session with sample emails
     async fn create_test_session() -> Result<UserSession, Box<dyn std::error::Error>> {
-        let mut mail_db = EmailDB::default().await?;
+        let mail_db = EmailDB::default().await?;
 
         // Add some test emails
         let sample_emails = vec![

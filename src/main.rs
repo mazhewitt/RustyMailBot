@@ -22,11 +22,9 @@ async fn main() -> std::io::Result<()> {
 
     let secret_key = Key::from("0123456789012345678901234567890123456789012345678901234567890123".as_bytes());
 
-    // Create an instance of Ollama and GlobalSessionManager.
-    let ollama = config::create_ollama();
     let session_manager = email_service::create_session_manager();
 
-    let app_state = AppState {   ollama, session_manager };
+    let app_state = AppState {  session_manager };
 
     HttpServer::new(move || {
         App::new()

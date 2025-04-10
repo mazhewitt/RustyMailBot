@@ -20,7 +20,6 @@ pub fn init_logging() {
 }
 
 pub const MODEL_NAME: &str = "llama3.2";
-pub const EMBEDDING_MODEL: &str = "all-minilm";
 pub const SYSTEM_PROMPT: &str = "You are a helpful assistant for writing emails";
 
 pub fn ollama_port() -> u16 {
@@ -36,9 +35,7 @@ pub fn ollama_host() -> String {
     Config::from_env().unwrap().ollama_url
 }
 
-pub fn meilisearch_master_key() -> String {
-   Config::from_env().unwrap().meilisearch_admin_key
-}
+
 
 pub fn meilisearch_url() -> String {
    Config::from_env().unwrap().meilisearch_url
@@ -48,9 +45,6 @@ pub fn meilisearch_admin_key() -> String {
    Config::from_env().unwrap().meilisearch_admin_key
 }
 
-pub fn meilisearch_search_key() -> String {
-    Config::from_env().unwrap().meilisearch_search_key
-}
 
 pub struct Config {
     pub meilisearch_url: String,
@@ -283,7 +277,7 @@ mod tests {
 
         // Verify that it has proper host and port
         let expected_host = ollama_host();
-        let expected_port = ollama_port();
+
 
         // We can access these through debug representation, as actual fields are private
         let debug_str = format!("{:?}", ollama);
