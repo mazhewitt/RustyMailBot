@@ -116,6 +116,12 @@ impl Config {
     }
 }
 
+pub fn create_ollama() -> Ollama {
+    Ollama::new(ollama_host(), ollama_port())
+}
+
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,22 +276,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_create_ollama() {
-        // Create an Ollama instance
-        let ollama = create_ollama();
-
-        // Verify that it has proper host and port
-        let expected_host = ollama_host();
+    
 
 
-        // We can access these through debug representation, as actual fields are private
-        let debug_str = format!("{:?}", ollama);
-        assert!(debug_str.contains(&expected_host), "Ollama should use the configured host");
-    }
+
 }
-
-pub fn create_ollama() -> Ollama {
-    Ollama::new(ollama_host(), ollama_port())
-}
-

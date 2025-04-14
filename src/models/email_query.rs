@@ -106,6 +106,7 @@ async fn enhance_criteria_with_llm(
         Intent::Reply => "reply to an email",
         Intent::Compose => "compose an email",
         Intent::Explain => "explain an email",
+        Intent::List => "list emails",
         Intent::General => "find emails",
     };
 
@@ -173,7 +174,16 @@ async fn enhance_criteria_with_llm(
     };
 
     // Create criteria from LLM analysis
+
+    let llm_criteria = refine_query_with_intent(query, analysis, intent);
+
+    Ok(llm_criteria)
+}
+
+fn refine_query_with_intent(query: &str, analysis: LlmQueryAnalysis, intent: Intent) -> QueryCriteria {
     let mut llm_criteria = QueryCriteria::new(query);
+
+    // Start with the LLM analysis as a base
     llm_criteria.from = analysis.from;
     llm_criteria.to = analysis.to;
     llm_criteria.subject = analysis.subject;
@@ -189,17 +199,92 @@ async fn enhance_criteria_with_llm(
         llm_criteria.date_to = parse_date_string(&date_str);
     }
 
-    // Add fallback: if the "from" field is None, try to extract it from query text.
-    if llm_criteria.from.is_none() {
-        if let Some(name) = extract_pattern(query, r"(?i)\b(bob)\b") {
-            llm_criteria.from = Some(name);
+    // Apply intent-based refinements
+    match intent {
+        Intent::Reply => {
+            // For replies, prioritize "from" field as it indicates who we're replying to
+            if llm_criteria.from.is_none() {
+                // Try various patterns for extracting recipient in reply contexts
+                llm_criteria.from = extract_pattern(query, r"(?i)reply\s+to\s+([A-Za-z0-9@._-]+)")
+                    .or_else(|| extract_pattern(query, r"(?i)(?:from|form)\s+([A-Za-z0-9@._-]+)"))
+                    .or_else(|| extract_pattern(query, r"(?i)\bto\s+([A-Za-z0-9@._-]+)\b"));
+            }
+        },
+        Intent::Compose => {
+            // For compose, prioritize "to" field as it indicates recipient
+            if llm_criteria.to.is_none() {
+                llm_criteria.to = extract_pattern(query, r"(?i)compose\s+(?:a|an)?\s+(?:email|message)?\s+to\s+([A-Za-z0-9@._-]+)")
+                    .or_else(|| extract_pattern(query, r"(?i)(?:to|for)\s+([A-Za-z0-9@._-]+)"));
+            }
+        },
+        Intent::Explain => {
+            // For explain intent, check both from/to fields with equal weight
+            if llm_criteria.from.is_none() {
+                llm_criteria.from = extract_pattern(query, r"(?i)(?:from|form|by)\s+([A-Za-z0-9@._-]+)");
+            }
+
+            // Also look for subject-related terms for explain intent
+            if llm_criteria.subject.is_none() {
+                llm_criteria.subject = extract_pattern(query, r"(?i)about\s+(.+)$")
+                    .or_else(|| extract_pattern(query, r"(?i)regarding\s+(.+)$"));
+            }
+        },
+        Intent::List => {
+            // For list intent, we generally want to return all emails,
+            // but check for any filtering criteria the user might have mentioned
+            
+            // Check for date limits in listing
+            if llm_criteria.date_from.is_none() && llm_criteria.date_to.is_none() {
+                if query.to_lowercase().contains("recent") || 
+                   query.to_lowercase().contains("last week") ||
+                   query.to_lowercase().contains("this week") {
+                    // Set default timeframe for "recent" as last 7 days
+                    let recent_date = Utc::now() - Duration::days(7);
+                    llm_criteria.date_from = Some(recent_date);
+                }
+            }
+            
+            // Check for specific sender mentions
+            if llm_criteria.from.is_none() && query.to_lowercase().contains("from") {
+                llm_criteria.from = extract_pattern(query, r"(?i)from\s+([A-Za-z0-9@._-]+)");
+            }
+        },
+        Intent::General => {
+            // For general search, be more flexible with extractions
+            if llm_criteria.from.is_none() && llm_criteria.to.is_none() {
+                // Extract potential names that could be senders or recipients
+                let potential_name = extract_pattern(query, r"(?i)\b(?:from|form|by|to)\s+([A-Za-z0-9@._-]+)\b");
+
+                if let Some(name) = potential_name {
+                    if query.to_lowercase().contains("from") || query.to_lowercase().contains("form") {
+                        llm_criteria.from = Some(name);
+                    } else if query.to_lowercase().contains("to") {
+                        llm_criteria.to = Some(name);
+                    }
+                }
+            }
         }
     }
 
-    Ok(llm_criteria)
+    // Look for capitalized words that might be names if we still don't have key fields
+    if llm_criteria.from.is_none() && llm_criteria.to.is_none() {
+        for word in query.split_whitespace() {
+            let cleaned = word.trim_matches(|c: char| !c.is_alphanumeric());
+            if !cleaned.is_empty() && cleaned.len() > 1 &&
+               cleaned.chars().next().unwrap().is_uppercase() &&
+               !["The", "A", "An", "I", "This"].contains(&cleaned) {
+                match intent {
+                    Intent::Reply => llm_criteria.from = Some(cleaned.to_string()),
+                    Intent::Compose => llm_criteria.to = Some(cleaned.to_string()),
+                    _ => llm_criteria.from = Some(cleaned.to_string()),
+                }
+                break;
+            }
+        }
+    }
+
+    llm_criteria
 }
-
-
 
 fn parse_date_string(date_str: &str) -> Option<DateTime<Utc>> {
     // Try parsing various date formats

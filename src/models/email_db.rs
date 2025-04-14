@@ -122,6 +122,16 @@ impl EmailDB {
         Ok(())
     }
 
+    // Gets all emails in the database without any filtering
+    pub async fn get_all_emails(&self) -> Result<Vec<Email>, EmailDBError> {
+        // Use an empty search to get all documents
+        let search_result = self.index.search()
+            .with_limit(100) // Set a reasonable limit
+            .execute::<Email>()
+            .await?;
+            
+        Ok(search_result.hits.into_iter().map(|hit| hit.result).collect())
+    }
 
     // language: rust
     pub async fn search_emails_by_criteria(&self, criteria: QueryCriteria) -> Result<Vec<Email>, EmailDBError> {
