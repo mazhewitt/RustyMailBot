@@ -1,18 +1,10 @@
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
-use anyhow::{anyhow, Result};
-use lazy_static::lazy_static;
-use crate::config;
+use std::collections::{HashSet};
 use crate::services::chat_service::Intent;
 
 // Cache to avoid repeated identical LLM calls
-lazy_static! {
-    static ref QUERY_CACHE: Arc<Mutex<HashMap<String, QueryCriteria>>> = Arc::new(Mutex::new(HashMap::new()));
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct QueryCriteria {
     pub keywords: Vec<String>,
@@ -38,165 +30,25 @@ impl QueryCriteria {
             llm_confidence: 0.0,
         }
     }
-
 }
 
-
-
-// Configuration for the query system
-#[derive(Clone, Debug)]
-pub struct QuerySystemConfig {
-    pub llm_model: String,
-}
-
-impl Default for QuerySystemConfig {
-    fn default() -> Self {
-        Self {
-            llm_model: "llama3.2".to_string(),  // Default to mistral model
-         }
-    }
-}
-
-// LLM response structure
-#[derive(Deserialize, Serialize, Debug)]
-struct LlmQueryAnalysis {
-    from: Option<String>,
-    to: Option<String>,
-    subject: Option<String>,
-    date_from: Option<String>,
-    date_to: Option<String>,
-    has_attachment: Option<bool>,
-    keywords: Vec<String>,
-    confidence: f32,
-}
-
-/// Refines a user query into structured search criteria
-/// Uses a hybrid approach combining regex patterns and LLM capabilities
-pub async fn refine_query(
-    user_input: &str,
-    intent_type: Intent
-) -> Result<QueryCriteria, Box<dyn std::error::Error>> {
-   let config = QuerySystemConfig::default();
-
-    enhance_criteria_with_llm(user_input, &config, intent_type)
-        .await
-        .or_else(|_| {
-            // Fallback to regex-based parsing if LLM fails
-            let mut criteria = QueryCriteria::new(user_input);
-            criteria.keywords = extract_keywords(user_input);
-            process_date_queries(user_input, &mut criteria);
-            Ok(criteria)
-        })
-}
-
-
-
-async fn enhance_criteria_with_llm(
-    query: &str,
-    config: &QuerySystemConfig,
-    intent: Intent
-) -> Result<QueryCriteria> {
-    // Use the convenient function to create an Ollama instance
-    let ollama = config::create_ollama();
-
-    // Construct our prompt
-    let today = Local::now();
-
-    let intent_string = match intent {
-        Intent::Reply => "reply to an email",
-        Intent::Compose => "compose an email",
-        Intent::Explain => "explain an email",
-        Intent::List => "list emails",
-        Intent::General => "find emails",
-    };
-
-    let prompt = format!(
-              r#"
-              Today is {}.
-
-              The user would like to {}. Using informaiton form the Query please extract parameters which will be used to find emails from thier inbox relevent to the users intent. Only supply criteria if you can derive them from the query.
-
-              If the user says something like "compose a reply to Bernhard please say sorry I didn't get back to him" then the From field should be "Bernhard", because we are replying to Bernhard.
-
-              Query: "{}"
-
-              Format your response as a valid JSON object with the following structure:
-              {{
-                "from": "sender email or name (null if not specified)",
-                "to": "recipient email or name (null if not specified)",
-                "subject": "email subject terms (null if not specified)",
-                "date_from": "ISO date string for earliest date (null if not specified)",
-                "date_to": "ISO date string for latest date (null if not specified)",
-                "has_attachment": boolean indicating if attachments are required (null if not specified),
-                "keywords": ["important", "words", "for", "search"],
-                "confidence": 0.95 // your confidence in this extraction from 0.0 to 1.0
-              }}
-
-              Only output valid JSON with no additional text.
-              "#,
-              today.format("%Y-%m-%d"),
-              intent_string,
-              query
-          );
-    log::debug!("LLM prompt: {}", prompt);
-
-    // Use ollama_rs to generate the response
-    let request = ollama_rs::generation::completion::request::GenerationRequest::new(
-        config.llm_model.clone(),
-        prompt
-    );
-
-    // Send the request and get the response
-    let response = match ollama.generate(request).await {
-        Ok(response) => response,
-        Err(e) => return Err(anyhow!("Ollama API error: {}", e))
-    };
-
-    let llm_response = response.response;
-
-    // Try to parse the JSON response, ensuring we complete the JSON if it was cut off
-    let mut json_text = llm_response.trim().to_string();
-    if !json_text.ends_with('}') {
-        json_text.push('}');
-    }
-
-    // Ensure any unclosed JSON arrays are closed properly
-    json_text = fix_json_if_needed(&json_text);
-
-    // Parse the JSON
-    let analysis: LlmQueryAnalysis = match serde_json::from_str(&json_text) {
-        Ok(a) => a,
-        Err(e) => {
-            log::error!("Failed to parse LLM response as JSON: {}", e);
-            log::error!("LLM response was: {}", json_text);
-            return Err(anyhow!("Invalid JSON from LLM"));
-        }
-    };
-
-    // Create criteria from LLM analysis
-
-    let llm_criteria = refine_query_with_intent(query, analysis, intent);
-
-    Ok(llm_criteria)
-}
-
-fn refine_query_with_intent(query: &str, analysis: LlmQueryAnalysis, intent: Intent) -> QueryCriteria {
+fn refine_query_with_intent(query: &str, analysis: QueryCriteria, intent: Intent) -> QueryCriteria {
     let mut llm_criteria = QueryCriteria::new(query);
 
-    // Start with the LLM analysis as a base
+    // Start with the analysis as a base
     llm_criteria.from = analysis.from;
     llm_criteria.to = analysis.to;
     llm_criteria.subject = analysis.subject;
     llm_criteria.keywords = analysis.keywords;
-    llm_criteria.llm_confidence = analysis.confidence;
+    llm_criteria.llm_confidence = analysis.llm_confidence;
 
     // Parse date strings
     if let Some(date_str) = analysis.date_from {
-        llm_criteria.date_from = parse_date_string(&date_str);
+        llm_criteria.date_from = Some(date_str);
     }
 
     if let Some(date_str) = analysis.date_to {
-        llm_criteria.date_to = parse_date_string(&date_str);
+        llm_criteria.date_to = Some(date_str);
     }
 
     // Apply intent-based refinements
@@ -427,9 +279,6 @@ fn extract_keywords(text: &str) -> Vec<String> {
         .collect()
 }
 
-
-
-
 // Attempts to fix JSON if it was cut off by LLM
 fn fix_json_if_needed(json: &str) -> String {
     let mut result = json.to_string();
@@ -463,8 +312,6 @@ fn fix_json_if_needed(json: &str) -> String {
     result
 }
 
-
-
 // File: src/models/email_query.rs
 
 #[cfg(test)]
@@ -472,29 +319,24 @@ mod tests {
     use super::*;
     use crate::services::chat_service::Intent;
 
-
-    #[tokio::test]
-    async fn test_enhance_criteria_with_llm_reply_to_bob() {
-        // The test query: user wants to reply to bob, a carpenter who sent a quote.
+    #[test]
+    fn test_refine_query_with_intent_reply_to_bob() {
         let query = "I need to reply to Bob, the carpenter who sent me a quote. Find his latest email.";
+        let analysis = QueryCriteria {
+            keywords: vec!["quote".to_string()],
+            from: Some("Bob".to_string()),
+            to: None,
+            subject: None,
+            date_from: None,
+            date_to: None,
+            raw_query: query.to_string(),
+            llm_confidence: 0.9,
+        };
 
-        // Call the async function without mocking; it will integrate with the real LLM.
-        let result = enhance_criteria_with_llm(query, &QuerySystemConfig::default(), Intent::Reply).await;
-        assert!(result.is_ok(), "LLM enhancement failed: {:?}", result);
+        let criteria = refine_query_with_intent(query, analysis, Intent::Reply);
 
-        let criteria = result.unwrap();
-
-        // The criteria should contain a non-empty 'from' field including "bob".
-        assert!(criteria.from.is_some(), "Expected a 'from' field in the criteria.");
-        let from_field = criteria.from.unwrap().to_lowercase();
-        assert!(from_field.contains("bob"), "Expected the 'from' field to contain 'bob', got '{}'", from_field);
-
-        // Optionally check that keywords contain one of the indicative words like "quote".
-        assert!(!criteria.keywords.is_empty(), "Expected at least one keyword.");
-        let keywords_concat = criteria.keywords.join(" ").to_lowercase();
-        assert!(keywords_concat.contains("quote"), "Expected keywords to mention 'quote', got '{}'", keywords_concat);
+        assert!(criteria.from.is_some());
+        assert_eq!(criteria.from.unwrap(), "Bob");
+        assert!(criteria.keywords.contains(&"quote".to_string()));
     }
-
-
-
 }

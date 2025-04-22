@@ -133,80 +133,19 @@ impl EmailDB {
         Ok(search_result.hits.into_iter().map(|hit| hit.result).collect())
     }
 
-    // language: rust
     pub async fn search_emails_by_criteria(&self, criteria: QueryCriteria) -> Result<Vec<Email>, EmailDBError> {
+        use crate::models::query_builder::EmailQueryBuilder;
+        let builder = EmailQueryBuilder::new(criteria);
+        let (query, filter) = builder.build_meili_query();
         let mut search_query = self.index.search();
-
-        // Build the query string so it lives long enough.
-        let mut query: Option<String> = if !criteria.keywords.is_empty() {
-            Some(criteria.keywords.join(" "))
-        } else {
-            None
-        };
-
-        // Process the from field: if it is not an exact email address, use it for substring matching.
-        if let Some(ref from) = criteria.from {
-            if from.contains("@") {
-                // Exact match via filter.
-            } else {
-                match query {
-                    Some(ref mut q) => {
-                        q.push_str(" ");
-                        q.push_str(from);
-                    },
-                    None => query = Some(from.clone()),
-                }
-            }
-        }
-
-        if let Some(ref q) = query {
-            search_query.with_query(q);
-        }
-
-        // Build filter expressions with extended lifetimes.
-        let filter: Option<String> = {
-            let mut filters = Vec::new();
-
-            // Only add exact match filter for \"from\" if it is an email address.
-            if let Some(ref from) = criteria.from {
-                if from.contains("@") {
-                    filters.push(format!("from = \"{}\"", from));
-                }
-            }
-
-            if let Some(ref to) = criteria.to {
-                filters.push(format!("to = \"{}\"", to));
-            }
-
-            if let Some(ref subject) = criteria.subject {
-                filters.push(format!("subject = \"{}\"", subject));
-            }
-
-            if let Some(ref date_from) = criteria.date_from {
-                filters.push(format!("date >= \"{}\"", date_from));
-            }
-
-            if let Some(ref date_to) = criteria.date_to {
-                filters.push(format!("date <= \"{}\"", date_to));
-            }
-
-           if !filters.is_empty() {
-                Some(filters.join(" AND "))
-            } else {
-                None
-            }
-        };
-
-        if let Some(ref f) = filter {
-            search_query.with_filter(f);
-        }
-
-        // Execute the search
+        let query_owned = query;
+        let filter_owned = filter;
+        if let Some(ref q) = query_owned { search_query.with_query(q); }
+        if let Some(ref f) = filter_owned { search_query.with_filter(f); }
         let search_result = search_query
             .execute::<Email>()
             .await
             .map_err(|e| EmailDBError::OperationError(format!("Search failed: {}", e)))?;
-
         Ok(search_result.hits.into_iter().map(|hit| hit.result).collect())
     }
 }

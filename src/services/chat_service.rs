@@ -6,6 +6,7 @@ use ollama_rs::generation::chat::{ChatMessage, request::ChatMessageRequest};
 use serde::{Deserialize, Serialize};
 use crate::config;
 use crate::models::email::format_emails;
+use crate::services::llm_service;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Intent {
@@ -174,7 +175,7 @@ pub async fn process_chat(
     let context_emails = match intent {
             Intent::Reply => {
                 // For replies, we need to find a specific email
-                let refined_query = email_query::refine_query(user_input, Intent::Reply).await?;
+                let refined_query = llm_service::refine_query(user_input, Intent::Reply).await?;
                 info!("Refined query for reply: {:?}", refined_query);
                 let emails = user_session.mailbox.search_emails_by_criteria(refined_query).await?;
 
@@ -186,14 +187,14 @@ pub async fn process_chat(
             },
             Intent::Compose => {
                 // For compose, we might want related emails as context but don't require them
-                let refined_query = email_query::refine_query(user_input, Intent::Compose).await?;
+                let refined_query = llm_service::refine_query(user_input, Intent::Compose).await?;
                 info!("Refined query for compose: {:?}", refined_query);
                 user_session.mailbox.search_emails_by_criteria(refined_query).await?
                 // Empty results are fine for compose
             },
             Intent::Explain => {
                 // For explain, we need to find the specific email(s) to explain
-                let refined_query = email_query::refine_query(user_input, Intent::Explain).await?;
+                let refined_query = llm_service::refine_query(user_input, Intent::Explain).await?;
                 info!("Refined query for explain: {:?}", refined_query);
                 let emails = user_session.mailbox.search_emails_by_criteria(refined_query).await?;
 
@@ -210,7 +211,7 @@ pub async fn process_chat(
             },
             Intent::General => {
                 // For general queries, do a broad search
-                let refined_query = email_query::refine_query(user_input, Intent::General).await?;
+                let refined_query = llm_service::refine_query(user_input, Intent::General).await?;
                 info!("Refined query for general query: {:?}", refined_query);
                 user_session.mailbox.search_emails_by_criteria(refined_query).await?
                 // Empty results are acceptable for general queries
