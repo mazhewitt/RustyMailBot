@@ -1,7 +1,6 @@
 use std::fmt;
-use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct Email {
     pub from: Option<String>,
     pub to: Option<String>,
@@ -35,8 +34,6 @@ impl fmt::Display for Email {
         Ok(())
     }
 }
-
-
 
 pub fn format_emails(emails: &[Email]) -> String {
     emails.iter()

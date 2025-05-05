@@ -3,3 +3,4 @@
 
 // Import our test modules
 mod db;
+mod chat;
