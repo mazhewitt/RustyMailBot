@@ -25,7 +25,7 @@ thiserror = "1.0.69"
 meilisearch-sdk = "0.28.0"
 dotenv = "0.15.0"
 url = "2.5.4"
-
+html2text = "0.6.0"
 
 [dev-dependencies]
 mockall = "0.11"

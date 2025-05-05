@@ -185,25 +185,85 @@ fn get_header(headers: &[Value], name: &str) -> Option<String> {
 
 /// Helper: extract the plain text body from a message payload.
 fn extract_plain_text_body(payload: &Value) -> Option<String> {
-    if let Some(mime_type) = payload.get("mimeType").and_then(|m| m.as_str()) {
-        if mime_type == "text/plain" {
-            return payload.get("body")
-                .and_then(|b| b.get("data"))
-                .and_then(|d| d.as_str())
-                .map(String::from);
-        }
+    // First try direct body for simple emails
+    if let Some(body_data) = payload.get("body").and_then(|b| b.get("data")).and_then(|d| d.as_str()) {
+        debug!("Found direct body data");
+        return Some(body_data.to_string());
     }
-    if let Some(parts) = payload.get("parts").and_then(|p| p.as_array()) {
-        for part in parts {
-            if let Some(part_mime) = part.get("mimeType").and_then(|m| m.as_str()) {
-                if part_mime == "text/plain" {
-                    return part.get("body")
+
+    if let Some(mime_type) = payload.get("mimeType").and_then(|m| m.as_str()) {
+        // For text/plain emails
+        if mime_type == "text/plain" {
+            debug!("Found text/plain mime type");
+            if let Some(body_data) = payload.get("body")
+                .and_then(|b| b.get("data"))
+                .and_then(|d| d.as_str()) {
+                return Some(body_data.to_string());
+            }
+        }
+        
+        // For multipart emails, search recursively through parts
+        if mime_type.starts_with("multipart/") {
+            debug!("Searching multipart email");
+            if let Some(parts) = payload.get("parts").and_then(|p| p.as_array()) {
+                // First pass - look for text/plain parts specifically
+                for part in parts {
+                    if let Some(part_mime) = part.get("mimeType").and_then(|m| m.as_str()) {
+                        if part_mime == "text/plain" {
+                            debug!("Found text/plain part in multipart email");
+                            if let Some(body_data) = part.get("body")
+                                .and_then(|b| b.get("data"))
+                                .and_then(|d| d.as_str()) {
+                                return Some(body_data.to_string());
+                            }
+                        }
+                        
+                        // Recursively check nested multipart structures
+                        if part_mime.starts_with("multipart/") {
+                            debug!("Recursively checking nested multipart");
+                            if let Some(nested_body) = extract_plain_text_body(part) {
+                                return Some(nested_body);
+                            }
+                        }
+                    }
+                }
+                
+                // Second pass - accept any part that has body data as fallback
+                for part in parts {
+                    if let Some(body_data) = part.get("body")
                         .and_then(|b| b.get("data"))
-                        .and_then(|d| d.as_str())
-                        .map(String::from);
+                        .and_then(|d| d.as_str()) {
+                        debug!("Found fallback body data in part");
+                        return Some(body_data.to_string());
+                    }
+                    
+                    // Check if there's a nested body we can extract
+                    if let Some(nested_parts) = part.get("parts").and_then(|p| p.as_array()) {
+                        for nested_part in nested_parts {
+                            if let Some(body_data) = nested_part.get("body")
+                                .and_then(|b| b.get("data"))
+                                .and_then(|d| d.as_str()) {
+                                debug!("Found nested body data");
+                                return Some(body_data.to_string());
+                            }
+                        }
+                    }
                 }
             }
         }
     }
+    
+    // As a last resort, check if there's a snippet in the message
+    debug!("No body found in regular structure, checking for snippet");
+    if let Some(parent) = payload.as_object() {
+        if parent.contains_key("snippet") {
+            if let Some(snippet) = parent.get("snippet").and_then(|s| s.as_str()) {
+                debug!("Using snippet as body");
+                return Some(format!("(Snippet only) {}", snippet));
+            }
+        }
+    }
+
+    debug!("No body content found");
     None
 }
