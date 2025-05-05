@@ -26,15 +26,16 @@ pub async fn handle_chat_request(
             Ok(response_content) => {
                 // Update the session after processing
                 data.session_manager.insert(session_id.clone(), user_session);
-                HttpResponse::Ok().json(serde_json::json!({"response": response_content}))
+                // Return the raw response content without JSON wrapping
+                HttpResponse::Ok().content_type("text/plain").body(response_content)
             },
             Err(e) => {
                 error!("Error processing chat for session {}: {:?}", session_id, e);
-                HttpResponse::InternalServerError().json(serde_json::json!({"error": "Chat processing failed"}))
+                HttpResponse::InternalServerError().body("Sorry, I encountered an error processing your request.")
             }
         }
     } else {
         error!("Session \"{}\" not found!", session_id);
-        HttpResponse::InternalServerError().json(serde_json::json!({"error": "Session not initialized"}))
+        HttpResponse::InternalServerError().body("Session not initialized. Please refresh the page.")
     }
 }

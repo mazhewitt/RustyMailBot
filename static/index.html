@@ -118,33 +118,34 @@
 
         const sendMessage = async () => {
             if (!input.trim() || loading) return;
+            
+            // Store the user message
             const userMessage = input;
             setMessages(prev => [...prev, { sender: "user", text: userMessage }]);
             setInput("");
+            setLoading(true);
 
             try {
+                // Make the API call
                 const response = await fetch("/stream", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ message: userMessage })
                 });
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder();
-                let systemResponse = "";
-                setMessages(prev => [...prev, { sender: "system", text: "" }]);
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    const chunk = decoder.decode(value);
-                    systemResponse += chunk;
-                    setMessages(prev => {
-                        const newMessages = [...prev];
-                        newMessages[newMessages.length - 1].text = systemResponse;
-                        return newMessages;
-                    });
-                }
+                
+                // Get the response as plain text
+                const responseText = await response.text();
+                
+                // Add the system response to the messages
+                setMessages(prev => [...prev, { sender: "system", text: responseText }]);
             } catch (error) {
-                console.error("Error fetching stream:", error);
+                console.error("Error fetching response:", error);
+                setMessages(prev => [...prev, { 
+                    sender: "system", 
+                    text: "Sorry, I encountered an error processing your request."
+                }]);
+            } finally {
+                setLoading(false);
             }
         };
 
