@@ -143,6 +143,10 @@ fn refine_query_with_intent(query: &str, analysis: QueryCriteria, intent: Intent
                 llm_criteria.from = extract_pattern(query, r"(?i)from\s+([A-Za-z0-9@._-]+)");
             }
         },
+        Intent::Display => {
+            // For display intents, prioritize finding the specific email similar to Explain
+            // No special handling needed beyond the base criteria
+        },
         Intent::General => {
             // For general search, be more flexible with extractions
             if llm_criteria.from.is_none() && llm_criteria.to.is_none() {

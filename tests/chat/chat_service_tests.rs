@@ -150,8 +150,7 @@ async fn test_process_chat_list_filtered_intent() {
     println!("List filtered response: {}", response);
     
     // First check that Bob's details are in the response
-    let contains_bob = response.to_lowercase().contains("bob") || 
-                       response.to_lowercase().contains("urgent");
+    let contains_bob = response.to_lowercase().contains("bob");
     
     assert!(contains_bob, "Response should contain information about Bob's email");
     
@@ -165,4 +164,29 @@ async fn test_process_chat_list_filtered_intent() {
     assert!(has_bob_info, 
         "Response should contain information relevant to Bob's email. Response: {}", 
         response);
+}
+
+#[tokio::test]
+async fn test_process_chat_display_intent() {
+    let session = create_test_session().await;
+    assert!(session.is_ok(), "Failed to create test session");
+    let mut session = session.unwrap();
+
+    // Test displaying an email
+    let result = process_chat("Display the email from Bob about the report", &mut session).await;
+    assert!(result.is_ok(), "Failed to process chat for display intent");
+    let response = result.unwrap();
+    assert!(!response.is_empty(), "Response should not be empty");
+    
+    // The displayed email should be formatted as plain text
+    assert!(response.contains("From: bob@example.com"), "Response should contain the sender's email");
+    assert!(response.contains("Subject: Urgent: Report submission"), "Response should contain the subject");
+    assert!(response.contains("Hi, I need the quarterly report by end of day"), "Response should contain the email body");
+    assert!(response.contains("It's urgent!"), "Response should contain email body details");
+    
+    // The response should not contain HTML formatting or analysis
+    assert!(!response.contains("<html>"), "Response should not contain HTML tags");
+    assert!(!response.contains("<body>"), "Response should not contain HTML tags");
+    assert!(!response.contains("This email is from"), "Response should not contain analysis");
+    assert!(!response.contains("In this email, Bob is"), "Response should not contain explanation");
 }

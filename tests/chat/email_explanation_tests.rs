@@ -157,4 +157,120 @@ async fn test_explain_wrong_person_email() -> Result<(), Box<dyn std::error::Err
     Ok(())
 }
 
+#[tokio::test]
+async fn test_explain_long_email_with_bullet_points() -> Result<(), Box<dyn std::error::Error>> {
+    // Create a test session with a long email
+    let mut email_db = EmailDB::default().await?;
+    
+    // Clear any existing data
+    email_db.clear().await?;
+    
+    // Create a long test email with at least 5 distinct key points that should be identifiable
+    let long_email = Email {
+        from: Some("Sarah Chen <sarah.chen@techcorp.example>".to_string()),
+        to: Some("team@techcorp.example".to_string()),
+        subject: Some("Quarterly Product Roadmap and Strategic Updates".to_string()),
+        body: Some(
+            "Dear Team,\n\n\
+            I hope this email finds you well. As we approach the end of Q2, I wanted to provide a comprehensive update on our product roadmap and strategic initiatives for the remainder of 2025.\n\n\
+            1. Product Launch Timeline:\n\
+            We're excited to announce that the TechPro X500 will launch on August 15th, 2025. This represents a significant milestone for our company. The marketing department has already started preparing materials, and we'll need all hands on deck for the final testing phase beginning July 1st.\n\n\
+            2. Budget Allocation Changes:\n\
+            Due to recent market changes, we're reallocating 30% of our marketing budget to R&D. This will allow us to accelerate development on the Y-Series, which is now planned for a Q1 2026 release instead of Q2. Please adjust your departmental budgets accordingly and submit revised plans by May 20th.\n\n\
+            3. New Office Opening:\n\
+            Our new Singapore office will officially open on September 5th, 2025. We're currently hiring for 25 positions across engineering, sales, and support. If you know qualified candidates, please refer them to HR. All senior managers are expected to attend the opening ceremony, so please mark your calendars.\n\n\
+            4. Customer Satisfaction Metrics:\n\
+            Our CSAT scores have improved from 7.8 to 8.6 over the past quarter, which exceeds our target of 8.2. Special thanks to the customer support and product teams for their excellent work. However, we've seen a slight decrease in NPS from 45 to 42, which requires our attention. The CX team will schedule workshops to address this.\n\n\
+            5. Compliance Requirements:\n\
+            New industry regulations will take effect on October 1st. All staff must complete the updated compliance training by September 15th. Additionally, our products will require recertification under the new standards. The legal team will distribute detailed information packets next week.\n\n\
+            6. Team Restructuring:\n\
+            As part of our growth strategy, we're reorganizing into five business units instead of three. This will create new leadership opportunities within the organization. Detailed org charts will be shared by HR on May 12th, and internal applications for new positions will open on May 15th.\n\n\
+            7. Sustainability Initiative:\n\
+            We're committed to achieving carbon neutrality by 2027. Starting next month, we'll begin transitioning all packaging to sustainable materials, which may temporarily increase costs by 5-8%. However, our market research suggests this will positively impact consumer perception and potentially increase market share by 2-3%.\n\n\
+            Please review these updates with your respective teams and come prepared to discuss any questions during our all-hands meeting next Friday.\n\n\
+            Best regards,\n\
+            Sarah Chen\n\
+            Chief Product Officer\n\
+            TechCorp, Inc.".to_string()
+        ),
+        date: Some("2025-05-04T09:30:00Z".to_string()),
+        message_id: Some("quarterly-update-123".to_string()),
+    };
+
+    // Store the long email
+    email_db.store_emails(&[long_email]).await?;
+    
+    // Give the database a moment to index the new email
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+    // Create a user session with the test email
+    let mut session = UserSession {
+        history: Vec::new(),
+        mailbox: email_db,
+    };
+
+    // Verify the email was loaded by directly querying the database instead of using the chat interface
+    let all_emails = session.mailbox.search_emails("").await?;
+    let has_sarah_email = all_emails.iter().any(|email| 
+        email.from.as_ref().map_or(false, |from| from.contains("Sarah Chen"))
+    );
+    
+    assert!(has_sarah_email, "Email from Sarah Chen should be in the database");
+    
+    // Skip the list check and go directly to the explanation request
+    // Ask the chat to explain the email with bullet points
+    let explain_result = process_chat("please explain the email from Sarah Chen with bullet points summarizing the 5 most important points", &mut session).await?;
+    
+    // Define the key points to check for
+    let key_points = [
+        ("product launch", &["TechPro X500", "August 15th"][..]),
+        ("budget", &["reallocating 30%", "marketing", "R&D"][..]),
+        ("Singapore office", &["September 5th", "hiring for 25 positions"][..]),
+        ("CSAT scores", &["improved from 7.8 to 8.6", "NPS", "decrease from 45 to 42"][..]),
+        ("compliance", &["regulations", "October 1st", "training by September 15th"][..]),
+        ("business units", &["reorganizing", "five business units", "leadership opportunities"][..]),
+        ("sustainability", &["carbon neutrality", "2027", "sustainable materials"][..]),
+    ];
+    
+    // Count how many key points were identified
+    let mut points_identified = 0;
+    let explain_result_lower = explain_result.to_lowercase();
+    
+    for (main_term, related_terms) in &key_points {
+        if explain_result_lower.contains(&main_term.to_lowercase()) {
+            points_identified += 1;
+        } else {
+            // Check for related terms if main term isn't found
+            for term in *related_terms {
+                if explain_result_lower.contains(&term.to_lowercase()) {
+                    points_identified += 1;
+                    break;
+                }
+            }
+        }
+    }
+    
+    // Print the explanation for debugging
+    println!("Email explanation: {}", explain_result);
+    println!("Points identified: {}", points_identified);
+    
+    // Verify that at least 5 key points were identified
+    assert!(
+        points_identified >= 5,
+        "Failed to identify at least 5 key points in the email. Only found {} points. Response: {}", 
+        points_identified, 
+        explain_result
+    );
+    
+    // Verify that the response contains bullet point formatting
+    assert!(
+        explain_result.contains("•") || explain_result.contains("-") || explain_result.contains("*") || 
+        explain_result.contains("1.") || explain_result.contains("1)"),
+        "Response doesn't appear to use bullet point formatting. Response: {}", 
+        explain_result
+    );
+
+    Ok(())
+}
+
 
