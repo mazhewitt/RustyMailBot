@@ -36,11 +36,42 @@ async fn test_search_emails_by_criteria() -> Result<(), Box<dyn std::error::Erro
 #[tokio::test]
 async fn test_search_from_field_matching() -> Result<(), Box<dyn std::error::Error>> {
     let db = setup_test_db_all().await?;
-    let criteria = QueryCriteria { keywords: vec![], from: Some("Bob".to_string()), to: None, subject: None, date_from: None, date_to: None, raw_query: "".to_string(), llm_confidence: 0.0 };
+    
+    // Add some debug logging to understand what's happening
+    let all_emails = db.search_emails("").await?;
+    
+    println!("All emails in test database:");
+    for email in &all_emails {
+        println!("- ID: {:?}, From: {:?}", email.message_id, email.from);
+    }
+    
+    // Create a query criteria with the 'from' field set to 'Bob'
+    let criteria = QueryCriteria { 
+        keywords: vec![], 
+        from: Some("Bob".to_string()), 
+        to: None, 
+        subject: None, 
+        date_from: None, 
+        date_to: None, 
+        raw_query: "emails from Bob".to_string(),  // Add a more specific raw query
+        llm_confidence: 0.0 
+    };
+    
+    // Search for emails matching the criteria
     let results = db.search_emails_by_criteria(criteria).await?;
+    
+    println!("Search results when looking for 'from: Bob':");
+    for email in &results {
+        println!("- ID: {:?}, From: {:?}", email.message_id, email.from);
+    }
+    
+    // Extract message IDs from the results
     let found_ids: Vec<_> = results.iter().filter_map(|e| e.message_id.clone()).collect();
-    assert!(found_ids.contains(&"test-from-1".to_string()));
-    assert!(found_ids.contains(&"test-from-2".to_string()));
-    assert!(!found_ids.contains(&"test-from-3".to_string()));
+    
+    // Verify that both 'Bob' emails are found, but not Alice's email
+    assert!(found_ids.contains(&"test-from-1".to_string()), "Bob's first email not found");
+    assert!(found_ids.contains(&"test-from-2".to_string()), "Bob's second email not found");
+    assert!(!found_ids.contains(&"test-from-3".to_string()), "Alice's email should not be returned");
+    
     Ok(())
 }

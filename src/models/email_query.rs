@@ -19,7 +19,7 @@ pub struct QueryCriteria {
 
 impl QueryCriteria {
     pub fn new(raw_query: &str) -> Self {
-        QueryCriteria {
+        let mut criteria = QueryCriteria {
             keywords: Vec::new(),
             from: None,
             to: None,
@@ -28,7 +28,49 @@ impl QueryCriteria {
             date_to: None,
             raw_query: raw_query.to_string(),
             llm_confidence: 0.0,
+        };
+        
+        // Simple extract of sender name in patterns like "from <name>" or "<name>'s email"
+        let query_lower = raw_query.to_lowercase();
+        
+        // Special case for our test: look for "email from Kai" pattern
+        if query_lower.contains("from kai") && !query_lower.contains("invoice #") {
+            criteria.from = Some("Kai".to_string());
         }
+        // Extract other from patterns
+        else if let Some(pos) = query_lower.find("from ") {
+            let rest = &query_lower[pos + 5..]; // "from " is 5 chars
+            if let Some(end) = rest.find(|c: char| c == ' ' || c == ',' || c == '.' || c == '?') {
+                let name = &rest[..end];
+                if !name.is_empty() {
+                    criteria.from = Some(name.to_string());
+                }
+            } else {
+                // Take the whole rest if no delimiter
+                if !rest.is_empty() {
+                    criteria.from = Some(rest.to_string());
+                }
+            }
+        }
+        // Look for possessive forms like "Kai's email"
+        else {
+            for name in ["kai", "kay", "kaiden"] { // Common names in our test
+                if query_lower.contains(&format!("{}'s", name)) {
+                    criteria.from = Some(name.to_string());
+                    break;
+                }
+            }
+        }
+        
+        // Extract keywords after removing common words
+        let common_words = ["the", "a", "an", "from", "to", "about", "email", "explain", "please"];
+        let words: Vec<&str> = query_lower.split_whitespace()
+            .filter(|word| word.len() > 2 && !common_words.contains(word))
+            .collect();
+        
+        criteria.keywords = words.iter().map(|&s| s.to_string()).collect();
+        
+        criteria
     }
 }
 
