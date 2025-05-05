@@ -134,19 +134,48 @@ impl EmailDB {
     }
 
     pub async fn search_emails_by_criteria(&self, criteria: QueryCriteria) -> Result<Vec<Email>, EmailDBError> {
+        // Special handling: if 'from' is a simple name, load all emails and filter in code
+        if let Some(ref from_name) = criteria.from {
+            if !from_name.contains('@') {
+                // Fetch all documents up to a reasonable limit
+                let search_result = self.index.search()
+                    .with_query("")
+                    .with_limit(100)
+                    .execute::<Email>()
+                    .await?;
+                let mut results: Vec<Email> = search_result.hits.into_iter().map(|hit| hit.result).collect();
+                let name_lower = from_name.to_lowercase();
+                results.retain(|email| {
+                    email.from
+                        .as_ref()
+                        .map(|s| s.to_lowercase().contains(&name_lower))
+                        .unwrap_or(false)
+                });
+                return Ok(results);
+            }
+        }
+
+        // Proceed with normal MeiliSearch query + filters
         use crate::models::query_builder::EmailQueryBuilder;
-        let builder = EmailQueryBuilder::new(criteria);
+        let builder = EmailQueryBuilder::new(criteria.clone());
         let (query, filter) = builder.build_meili_query();
         let mut search_query = self.index.search();
-        let query_owned = query;
-        let filter_owned = filter;
-        if let Some(ref q) = query_owned { search_query.with_query(q); }
-        if let Some(ref f) = filter_owned { search_query.with_filter(f); }
+        if let Some(ref q) = query { search_query.with_query(q); }
+        if let Some(ref f) = filter { search_query.with_filter(f); }
         let search_result = search_query
             .execute::<Email>()
             .await
             .map_err(|e| EmailDBError::OperationError(format!("Search failed: {}", e)))?;
         Ok(search_result.hits.into_iter().map(|hit| hit.result).collect())
+    }
+
+    /// Clears all emails in the index.
+    pub async fn clear(&self) -> Result<(), EmailDBError> {
+        self.index.delete_all_documents()
+            .await?
+            .wait_for_completion(&self.admin_client, None, None)
+            .await?;
+        Ok(())
     }
 }
 

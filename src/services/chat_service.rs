@@ -109,65 +109,52 @@ pub async fn process_chat(
 
     // Special case for List intent
     if let Intent::List = intent {
-        // For list intent, we want to get all emails and format them in a summarized way
         info!("Processing List intent");
-        
-        let mut emails = Vec::new();
-        
-        // Check if the query contains "from" to filter by sender
-        if user_input.to_lowercase().contains("from bob") {
-            // Direct approach for tests: if explicitly asking for Bob's emails
-            info!("Filtering for emails from Bob");
-            emails = user_session.mailbox.search_emails("bob").await?;
-        } else {
-            // For general list requests, get all emails
-            info!("Getting all emails");
-            emails = user_session.mailbox.search_emails("").await?;
+
+        // Check for a generic 'from <sender>' filter
+        let input_lower = user_input.to_lowercase();
+        if let Some(pos) = input_lower.find("from ") {
+            // Extract the sender token immediately after "from "
+            let after = &input_lower[pos + 5..];
+            let sender = after.split_whitespace().next().unwrap_or("");
+            info!("Filtering for emails from {}", sender);
+            let emails = user_session.mailbox.search_emails(sender).await?;
+            if emails.is_empty() {
+                return Ok("No emails found matching your criteria.".to_string());
+            }
+
+            // Format and return summary for filtered results
+            let mut summary = String::new();
+            summary.push_str("Here's a summary of emails in your inbox:\n\n");
+            for (i, email) in emails.iter().enumerate() {
+                summary.push_str(&format!("{}. From: {} | Subject: {} | Date: {}\n",
+                    i + 1,
+                    email.from.as_deref().unwrap_or("Unknown"),
+                    email.subject.as_deref().unwrap_or("No Subject"),
+                    email.date.as_deref().unwrap_or("Unknown")
+                ));
+            }
+            return Ok(summary);
         }
-        
-        // If still empty, try one more approach for test cases
-        if emails.is_empty() {
-            info!("No emails found with initial search, trying all emails");
-            emails = user_session.mailbox.get_all_emails().await?;
-        }
-        
+
+        // No specific sender filter: list all emails
+        info!("Getting all emails");
+        let mut emails = user_session.mailbox.search_emails("").await?;
         if emails.is_empty() {
             return Ok("No emails found matching your criteria.".to_string());
         }
-        
-        // Format the emails into a nice summary
+
+        // Format and return summary for all emails
         let mut summary = String::new();
         summary.push_str("Here's a summary of emails in your inbox:\n\n");
-        
         for (i, email) in emails.iter().enumerate() {
-            summary.push_str(&format!("{}. ", i + 1));
-            
-            // Add From
-            if let Some(ref from) = email.from {
-                summary.push_str(&format!("From: {}", from));
-            } else {
-                summary.push_str("From: Unknown");
-            }
-            summary.push_str(" | ");
-            
-            // Add Subject
-            if let Some(ref subject) = email.subject {
-                summary.push_str(&format!("Subject: {}", subject));
-            } else {
-                summary.push_str("Subject: No Subject");
-            }
-            summary.push_str(" | ");
-            
-            // Add Date
-            if let Some(ref date) = email.date {
-                summary.push_str(&format!("Date: {}", date));
-            } else {
-                summary.push_str("Date: Unknown");
-            }
-            
-            summary.push_str("\n");
+            summary.push_str(&format!("{}. From: {} | Subject: {} | Date: {}\n",
+                i + 1,
+                email.from.as_deref().unwrap_or("Unknown"),
+                email.subject.as_deref().unwrap_or("No Subject"),
+                email.date.as_deref().unwrap_or("Unknown")
+            ));
         }
-        
         return Ok(summary);
     }
 
@@ -213,8 +200,12 @@ pub async fn process_chat(
                 // For general queries, do a broad search
                 let refined_query = llm_service::refine_query(user_input, Intent::General).await?;
                 info!("Refined query for general query: {:?}", refined_query);
-                user_session.mailbox.search_emails_by_criteria(refined_query).await?
-                // Empty results are acceptable for general queries
+                let emails = user_session.mailbox.search_emails_by_criteria(refined_query).await?;
+                // If no relevant emails, indicate none found
+                if emails.is_empty() {
+                    return Ok("No emails found matching your criteria.".to_string());
+                }
+                emails
             }
     };
 

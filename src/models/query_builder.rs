@@ -11,30 +11,27 @@ impl EmailQueryBuilder {
 
     /// Build a MeiliSearch query string and filter from QueryCriteria
     pub fn build_meili_query(&self) -> (Option<String>, Option<String>) {
-        let mut query: Option<String> = if !self.criteria.keywords.is_empty() {
-            Some(self.criteria.keywords.join(" "))
-        } else {
-            None
-        };
-
-        if let Some(ref from) = self.criteria.from {
-            if !from.contains("@") {
-                match query {
-                    Some(ref mut q) => {
-                        q.push_str(" ");
-                        q.push_str(from);
-                    },
-                    None => query = Some(from.clone()),
-                }
-            }
+        // Start with keywords for general search
+        let mut query_terms = Vec::new();
+        if !self.criteria.keywords.is_empty() {
+            query_terms.push(self.criteria.keywords.join(" "));
         }
 
+        // Create filters for structured search
         let mut filters = Vec::new();
+        
+        // Handle 'from' field
         if let Some(ref from) = self.criteria.from {
             if from.contains("@") {
+                // For actual email addresses, use filter
                 filters.push(format!("from = \"{}\"", from));
+            } else {
+                // For names, add a search prefix targeting only the from field
+                query_terms.push(format!("from:\"{}\"", from));
             }
         }
+        
+        // Handle other structured fields normally
         if let Some(ref to) = self.criteria.to {
             filters.push(format!("to = \"{}\"", to));
         }
@@ -47,11 +44,20 @@ impl EmailQueryBuilder {
         if let Some(ref date_to) = self.criteria.date_to {
             filters.push(format!("date <= \"{}\"", date_to));
         }
+        
+        // Build the final query string and filter
+        let query = if !query_terms.is_empty() {
+            Some(query_terms.join(" "))
+        } else {
+            None
+        };
+        
         let filter = if !filters.is_empty() {
             Some(filters.join(" AND "))
         } else {
             None
         };
+        
         (query, filter)
     }
 }
@@ -61,8 +67,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_build_meili_query_simple_name_becomes_search_term() {
-        // This test demonstrates why "explain the email from alice" might match the wrong email
+    fn test_build_meili_query_simple_name_becomes_query_term() {
+        // This test demonstrates why "explain the email from alice" now matches correctly
         
         // Create search criteria where from="alice" (no @ symbol)
         let criteria = QueryCriteria {
@@ -79,12 +85,11 @@ mod tests {
         let builder = EmailQueryBuilder::new(criteria);
         let (query, filter) = builder.build_meili_query();
         
-        // ISSUE: "alice" becomes a general search term, not a filter
-        assert_eq!(query, Some("alice".to_string()));
+        // "alice" now correctly becomes a query term
+        assert_eq!(query, Some("from:\"alice\"".to_string()));
         assert_eq!(filter, None);
         
-        // This means an email with "alice" anywhere in its content would match,
-        // not just emails where Alice is the sender
+        // This means only emails where Alice is the sender will match
     }
     
     #[test]
