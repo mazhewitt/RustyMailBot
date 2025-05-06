@@ -27,7 +27,8 @@ impl EmailQueryBuilder {
                 filters.push(format!("from = \"{}\"", from));
             } else {
                 // For names, add a search prefix targeting only the from field
-                query_terms.push(format!("from:\"{}\"", from));
+                // Use a case-insensitive search by using wildcards around the name
+                query_terms.push(format!("from:\"*{}*\"", from));
             }
         }
         
@@ -86,7 +87,7 @@ mod tests {
         let (query, filter) = builder.build_meili_query();
         
         // "alice" now correctly becomes a query term
-        assert_eq!(query, Some("from:\"alice\"".to_string()));
+        assert_eq!(query, Some("from:\"*alice*\"".to_string()));
         assert_eq!(filter, None);
         
         // This means only emails where Alice is the sender will match

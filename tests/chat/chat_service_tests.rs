@@ -191,3 +191,40 @@ async fn test_process_chat_display_intent() {
     assert!(!response.contains("This email is from"), "Response should not contain analysis");
     assert!(!response.contains("In this email, Bob is"), "Response should not contain explanation");
 }
+
+#[tokio::test]
+async fn test_failing_first_name_only_search() {
+    // Test case to reproduce the issue where searching by first name only fails to find emails
+    let session = create_test_session().await;
+    assert!(session.is_ok(), "Failed to create test session");
+    let mut session = session.unwrap();
+
+    // Add a complex formatted email with a first name that appears in different parts
+    let test_email = Email {
+        from: Some("Phil Amberg <phil.amberg@example.com>".to_string()),
+        to: Some("user@example.com".to_string()),
+        subject: Some("Important update".to_string()),
+        body: Some("This is an important update from Phil about our project.".to_string()),
+        date: Some("2023-06-03T09:00:00Z".to_string()),
+        message_id: Some("msg_phil_1".to_string()),
+    };
+
+    session.mailbox.store_email(&test_email).await.expect("Failed to store test email");
+
+    // This search should find Phil's email, but it will fail
+    let result = process_chat("find the email from Phil", &mut session).await;
+    assert!(result.is_ok(), "Failed to process chat for name search");
+    let response = result.unwrap();
+    
+    // This will fail because the system can't find Phil's email
+    assert!(response.contains("Phil Amberg") || response.contains("phil.amberg@example.com"), 
+        "Response should contain information about Phil's email but didn't: {}", response);
+    
+    // The response instead likely indicates no emails were found
+    assert!(!response.contains("no emails") && 
+            !response.contains("couldn't find") && 
+            !response.contains("don't have") && 
+            !response.contains("not found"),
+        "Response incorrectly indicates no emails were found: {}", response);
+}
+
